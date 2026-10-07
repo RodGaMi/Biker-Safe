@@ -84,8 +84,10 @@ service cloud.firestore {
         'allergies',
         'medicalConditions',
         'emergencyContactName',
+        'emergencyContactRelation',
         'emergencyContactPhone',
         'secondaryContactName',
+        'secondaryContactRelation',
         'secondaryContactPhone',
         'motorcycleDetails',
         'insuranceDetails',
@@ -103,8 +105,10 @@ service cloud.firestore {
         'allergies',
         'medicalConditions',
         'emergencyContactName',
+        'emergencyContactRelation',
         'emergencyContactPhone',
         'secondaryContactName',
+        'secondaryContactRelation',
         'secondaryContactPhone',
         'motorcycleDetails',
         'insuranceDetails',
@@ -123,8 +127,10 @@ service cloud.firestore {
       data.allergies is string && data.allergies.size() >= 0 && data.allergies.size() <= 500 &&
       data.medicalConditions is string && data.medicalConditions.size() >= 0 && data.medicalConditions.size() <= 1000 &&
       data.emergencyContactName is string && data.emergencyContactName.size() >= 2 && data.emergencyContactName.size() <= 100 &&
+      data.emergencyContactRelation is string && data.emergencyContactRelation.size() >= 1 && data.emergencyContactRelation.size() <= 50 &&
       data.emergencyContactPhone is string && data.emergencyContactPhone.size() >= 5 && data.emergencyContactPhone.size() <= 30 && data.emergencyContactPhone.matches('^[0-9+\\-()\\s]+$') &&
       data.secondaryContactName is string && data.secondaryContactName.size() >= 0 && data.secondaryContactName.size() <= 100 &&
+      data.secondaryContactRelation is string && data.secondaryContactRelation.size() >= 0 && data.secondaryContactRelation.size() <= 50 &&
       data.secondaryContactPhone is string && data.secondaryContactPhone.size() >= 0 && data.secondaryContactPhone.size() <= 30 && (data.secondaryContactPhone.size() == 0 || data.secondaryContactPhone.matches('^[0-9+\\-()\\s]+$')) &&
       data.motorcycleDetails is string && data.motorcycleDetails.size() >= 0 && data.motorcycleDetails.size() <= 150 &&
       data.insuranceDetails is string && data.insuranceDetails.size() >= 0 && data.insuranceDetails.size() <= 150 &&
@@ -175,6 +181,8 @@ service cloud.firestore {
         'subtitle',
         'price',
         'specs',
+        'stickerCount',
+        'availableColors',
         'sortOrder',
         'updatedAt'
       ]) &&
@@ -184,6 +192,8 @@ service cloud.firestore {
         'subtitle',
         'price',
         'specs',
+        'stickerCount',
+        'availableColors',
         'sortOrder',
         'updatedAt'
       ]) &&
@@ -192,6 +202,14 @@ service cloud.firestore {
       data.subtitle is string && data.subtitle.size() >= 1 && data.subtitle.size() <= 80 &&
       data.price is number && data.price >= 1 && data.price <= 100000 &&
       data.specs is string && data.specs.size() >= 2 && data.specs.size() <= 250 &&
+      data.stickerCount is number && data.stickerCount >= 1 && data.stickerCount <= 10 &&
+      data.availableColors is list &&
+      data.availableColors.size() >= 1 &&
+      data.availableColors.size() <= 8 &&
+      data.availableColors[0] is string &&
+      data.availableColors[0].size() >= 3 &&
+      data.availableColors[0].size() <= 20 &&
+      data.availableColors.hasOnly(['Rojo', 'Negro', 'Gris', 'Verde', 'Azul', 'Rosa', 'Morado', 'Amarillo']) &&
       data.sortOrder is number && data.sortOrder >= 1 && data.sortOrder <= 10 &&
       data.updatedAt is timestamp;
     }
@@ -267,8 +285,10 @@ service cloud.firestore {
               'allergies',
               'medicalConditions',
               'emergencyContactName',
+              'emergencyContactRelation',
               'emergencyContactPhone',
               'secondaryContactName',
+              'secondaryContactRelation',
               'secondaryContactPhone',
               'motorcycleDetails',
               'insuranceDetails',
@@ -282,7 +302,9 @@ service cloud.firestore {
           (existing().ownerId == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly([
               'isActive',
+              'emergencyContactRelation',
               'secondaryContactName',
+              'secondaryContactRelation',
               'secondaryContactPhone',
               'updatedAt'
             ])
@@ -338,13 +360,13 @@ service cloud.firestore {
       allow get: if isValidPkgId(pkgId);
       allow list: if existing().sortOrder >= 1;
 
-      allow create: if isVerifiedUser() &&
+      allow create: if isAdmin() &&
         isValidPkgId(pkgId) &&
         isValidStickerPackageOption(incoming()) &&
         incoming().pkgId == pkgId &&
         incoming().updatedAt == request.time;
 
-      allow update: if isVerifiedUser() &&
+      allow update: if isAdmin() &&
         isValidPkgId(pkgId) &&
         isValidStickerPackageOption(incoming()) &&
         incoming().pkgId == existing().pkgId &&
@@ -355,6 +377,8 @@ service cloud.firestore {
             'subtitle',
             'price',
             'specs',
+            'stickerCount',
+            'availableColors',
             'sortOrder',
             'updatedAt'
           ])

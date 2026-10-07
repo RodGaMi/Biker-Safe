@@ -11,6 +11,7 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   onSnapshot,
   query,
   where,
@@ -30,13 +31,17 @@ import {
   auth,
   db,
   signInWithGoogle,
+  signInAdminWithGoogle,
   signOutUser,
   OperationType,
   handleFirestoreError,
   BLOOD_TYPES,
+  ALL_STICKER_COLORS,
+  AUTHORIZED_ADMIN_EMAIL,
   EmergencyStickerRecord,
   StickerPackageOption,
   DEFAULT_STICKER_PACKAGES,
+  normalizePackageOption,
   generateUniqueTagId,
   sanitizeAndValidateStickerInput,
   parseEncodedStickerPacket,
@@ -89,8 +94,10 @@ export function BikerSafeApp() {
   const [allergies, setAllergies] = useState('');
   const [medicalConditions, setMedicalConditions] = useState('');
   const [emergencyContactName, setEmergencyContactName] = useState('');
+  const [emergencyContactRelation, setEmergencyContactRelation] = useState('');
   const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
   const [secondaryContactName, setSecondaryContactName] = useState('');
+  const [secondaryContactRelation, setSecondaryContactRelation] = useState('');
   const [secondaryContactPhone, setSecondaryContactPhone] = useState('');
   const [motorcycleDetails, setMotorcycleDetails] = useState('');
   const [insuranceDetails, setInsuranceDetails] = useState('');
@@ -133,6 +140,11 @@ export function BikerSafeApp() {
         setUserSticker(null);
         setHasPopulatedInitialForm(false);
         setAdminAuthenticated(false);
+      } else if (
+        !currentUser.emailVerified ||
+        currentUser.email?.toLowerCase() !== AUTHORIZED_ADMIN_EMAIL
+      ) {
+        setAdminAuthenticated(false);
       }
     });
     return () => unsubscribe();
@@ -154,7 +166,9 @@ export function BikerSafeApp() {
           });
           loaded.sort((a, b) => (a.sortOrder || 1) - (b.sortOrder || 1));
           if (loaded.length === 3) {
-            setPackages(loaded);
+            setPackages(
+              loaded.map((item, idx) => normalizePackageOption(item, idx))
+            );
           }
         }
       },
@@ -185,8 +199,10 @@ export function BikerSafeApp() {
           allergies: fallbackData.allergies || '',
           medicalConditions: fallbackData.medicalConditions || '',
           emergencyContactName: fallbackData.emergencyContactName || '',
+          emergencyContactRelation: fallbackData.emergencyContactRelation || '',
           emergencyContactPhone: fallbackData.emergencyContactPhone || '',
           secondaryContactName: fallbackData.secondaryContactName || '',
+          secondaryContactRelation: fallbackData.secondaryContactRelation || '',
           secondaryContactPhone: fallbackData.secondaryContactPhone || '',
           motorcycleDetails: fallbackData.motorcycleDetails || '',
           insuranceDetails: fallbackData.insuranceDetails || '',
@@ -212,7 +228,9 @@ export function BikerSafeApp() {
           const data = snap.data() as EmergencyStickerRecord;
           setLandingSticker({
             ...data,
+            emergencyContactRelation: data.emergencyContactRelation || '',
             secondaryContactName: data.secondaryContactName || '',
+            secondaryContactRelation: data.secondaryContactRelation || '',
             secondaryContactPhone: data.secondaryContactPhone || '',
           });
         }
@@ -248,7 +266,9 @@ export function BikerSafeApp() {
           const raw = docSnap.data() as EmergencyStickerRecord;
           records.push({
             ...raw,
+            emergencyContactRelation: raw.emergencyContactRelation || '',
             secondaryContactName: raw.secondaryContactName || '',
+            secondaryContactRelation: raw.secondaryContactRelation || '',
             secondaryContactPhone: raw.secondaryContactPhone || '',
           });
         });
@@ -264,8 +284,14 @@ export function BikerSafeApp() {
             setAllergies(primaryRecord.allergies);
             setMedicalConditions(primaryRecord.medicalConditions);
             setEmergencyContactName(primaryRecord.emergencyContactName);
+            setEmergencyContactRelation(
+              primaryRecord.emergencyContactRelation || ''
+            );
             setEmergencyContactPhone(primaryRecord.emergencyContactPhone);
             setSecondaryContactName(primaryRecord.secondaryContactName || '');
+            setSecondaryContactRelation(
+              primaryRecord.secondaryContactRelation || ''
+            );
             setSecondaryContactPhone(primaryRecord.secondaryContactPhone || '');
             setMotorcycleDetails(primaryRecord.motorcycleDetails || '');
             setInsuranceDetails(primaryRecord.insuranceDetails || '');
@@ -285,6 +311,9 @@ export function BikerSafeApp() {
               prev && prev.tagId === primaryRecord.tagId ? primaryRecord : prev
             );
           }
+        } else {
+          setUserSticker(null);
+          setCurrentTagId(null);
         }
       },
       (error) => {
@@ -312,7 +341,9 @@ export function BikerSafeApp() {
           const raw = docSnap.data() as EmergencyStickerRecord;
           all.push({
             ...raw,
+            emergencyContactRelation: raw.emergencyContactRelation || '',
             secondaryContactName: raw.secondaryContactName || '',
+            secondaryContactRelation: raw.secondaryContactRelation || '',
             secondaryContactPhone: raw.secondaryContactPhone || '',
           });
         });
@@ -347,6 +378,16 @@ export function BikerSafeApp() {
       const cleanName = pkg.name.trim().slice(0, 80);
       const cleanSubtitle = pkg.subtitle.trim().slice(0, 80);
       const cleanPrice = Math.max(1, Math.min(100000, Number(pkg.price) || 249));
+      const cleanStickerCount = Math.max(
+        1,
+        Math.min(10, Math.round(Number(pkg.stickerCount) || 1))
+      );
+      const cleanAvailableColors =
+        Array.isArray(pkg.availableColors) && pkg.availableColors.length > 0
+          ? pkg.availableColors.filter((c) =>
+              (ALL_STICKER_COLORS as readonly string[]).includes(c)
+            )
+          : [...ALL_STICKER_COLORS];
       const cleanSpecs = pkg.specs.trim().slice(0, 250);
       const path = `packages/${pkg.pkgId}`;
 
@@ -357,6 +398,8 @@ export function BikerSafeApp() {
           subtitle: cleanSubtitle.length >= 1 ? cleanSubtitle : pkg.subtitle,
           price: cleanPrice,
           specs: cleanSpecs.length >= 2 ? cleanSpecs : pkg.specs,
+          stickerCount: cleanStickerCount,
+          availableColors: cleanAvailableColors,
           sortOrder: i + 1,
           updatedAt: serverTimestamp(),
         });
@@ -366,14 +409,34 @@ export function BikerSafeApp() {
     }
   };
 
+  const handleDeleteStickerFromAdmin = async (
+    targetSticker: EmergencyStickerRecord
+  ) => {
+    const docPath = `stickers/${targetSticker.tagId}`;
+    try {
+      await deleteDoc(doc(db, 'stickers', targetSticker.tagId));
+      setAdminAllStickers((prev) =>
+        prev.filter((item) => item.tagId !== targetSticker.tagId)
+      );
+      if (userSticker && userSticker.tagId === targetSticker.tagId) {
+        setUserSticker(null);
+        setCurrentTagId(null);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, docPath);
+    }
+  };
+
   const handleLoadSampleData = () => {
     setFullName('Miguel Ángel Rojas');
     setBloodType('O+');
     setAllergies('Penicilina, Látex');
     setMedicalConditions('Asma controlada, Tomo salbutamol en inhalador');
-    setEmergencyContactName('María (Esposa)');
+    setEmergencyContactName('María González');
+    setEmergencyContactRelation('Esposa');
     setEmergencyContactPhone('+52 55 1234 5678');
-    setSecondaryContactName('Carlos Rojas (Hermano)');
+    setSecondaryContactName('Carlos Rojas');
+    setSecondaryContactRelation('Hermano');
     setSecondaryContactPhone('+52 55 8765 4321');
     setMotorcycleDetails('Yamaha MT-07 Gris · Casco AGV K6');
     setInsuranceDetails('GNP Seguros Póliza #MX-994120');
@@ -409,8 +472,10 @@ export function BikerSafeApp() {
       allergies,
       medicalConditions,
       emergencyContactName,
+      emergencyContactRelation,
       emergencyContactPhone,
       secondaryContactName,
+      secondaryContactRelation,
       secondaryContactPhone,
       motorcycleDetails,
       insuranceDetails,
@@ -435,8 +500,10 @@ export function BikerSafeApp() {
           allergies: validation.data.allergies,
           medicalConditions: validation.data.medicalConditions,
           emergencyContactName: validation.data.emergencyContactName,
+          emergencyContactRelation: validation.data.emergencyContactRelation,
           emergencyContactPhone: validation.data.emergencyContactPhone,
           secondaryContactName: validation.data.secondaryContactName,
+          secondaryContactRelation: validation.data.secondaryContactRelation,
           secondaryContactPhone: validation.data.secondaryContactPhone,
           motorcycleDetails: validation.data.motorcycleDetails,
           insuranceDetails: validation.data.insuranceDetails,
@@ -569,14 +636,39 @@ export function BikerSafeApp() {
           />
         ) : viewMode === 'admin_login' ? (
           <AdminLoginView
-            ensureFirebaseSignedIn={async () => {
-              if (user) return true;
-              try {
-                await signInWithGoogle();
-                return true;
-              } catch {
-                return false;
+            currentUserEmail={user?.email}
+            verifyAdminGoogleAccount={async () => {
+              let targetUser = user;
+              if (
+                !targetUser ||
+                !targetUser.emailVerified ||
+                targetUser.email?.toLowerCase() !== AUTHORIZED_ADMIN_EMAIL
+              ) {
+                try {
+                  targetUser = await signInAdminWithGoogle();
+                } catch {
+                  return {
+                    ok: false,
+                    error:
+                      'Se requiere verificar tu identidad con Google para acceder al panel.',
+                  };
+                }
               }
+
+              if (
+                !targetUser.emailVerified ||
+                targetUser.email?.toLowerCase() !== AUTHORIZED_ADMIN_EMAIL
+              ) {
+                setAdminAuthenticated(false);
+                return {
+                  ok: false,
+                  error: `Acceso denegado: El correo "${
+                    targetUser.email || 'desconocido'
+                  }" no está autorizado. Solo se permite verificar con ${AUTHORIZED_ADMIN_EMAIL}.`,
+                };
+              }
+
+              return { ok: true };
             }}
             onLoginSuccess={() => {
               setAdminAuthenticated(true);
@@ -589,6 +681,7 @@ export function BikerSafeApp() {
             stickers={adminAllStickers}
             packages={packages}
             onSavePackages={handleSavePackagesFromAdmin}
+            onDeleteSticker={handleDeleteStickerFromAdmin}
             onPreviewStickerLanding={(targetSticker) => {
               setLandingSticker(targetSticker);
               setLandingTagId(targetSticker.tagId);
@@ -810,8 +903,8 @@ export function BikerSafeApp() {
                     </div>
 
                     {/* Contacto Principal */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                      <div>
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                      <div className="sm:col-span-5">
                         <label
                           htmlFor="emergencyContactName"
                           className="block text-xs font-semibold text-zinc-300 mb-2"
@@ -827,12 +920,33 @@ export function BikerSafeApp() {
                           onChange={(e) =>
                             setEmergencyContactName(e.target.value)
                           }
-                          placeholder="Ej. María (Esposa)"
+                          placeholder="Ej. María González"
                           className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
                         />
                       </div>
 
-                      <div>
+                      <div className="sm:col-span-3">
+                        <label
+                          htmlFor="emergencyContactRelation"
+                          className="block text-xs font-semibold text-zinc-300 mb-2"
+                        >
+                          Parentesco
+                        </label>
+                        <input
+                          id="emergencyContactRelation"
+                          type="text"
+                          required
+                          maxLength={50}
+                          value={emergencyContactRelation}
+                          onChange={(e) =>
+                            setEmergencyContactRelation(e.target.value)
+                          }
+                          placeholder="Ej. Esposa, Madre..."
+                          className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-4">
                         <label
                           htmlFor="emergencyContactPhone"
                           className="block text-xs font-semibold text-zinc-300 mb-2"
@@ -855,8 +969,8 @@ export function BikerSafeApp() {
                     </div>
 
                     {/* Segundo Contacto de Emergencia */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-1">
-                      <div>
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1">
+                      <div className="sm:col-span-5">
                         <label
                           htmlFor="secondaryContactName"
                           className="block text-xs font-semibold text-zinc-300 mb-2"
@@ -871,12 +985,32 @@ export function BikerSafeApp() {
                           onChange={(e) =>
                             setSecondaryContactName(e.target.value)
                           }
-                          placeholder="Ej. Carlos Rojas (Hermano / Padre)"
+                          placeholder="Ej. Carlos Rojas"
                           className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
                         />
                       </div>
 
-                      <div>
+                      <div className="sm:col-span-3">
+                        <label
+                          htmlFor="secondaryContactRelation"
+                          className="block text-xs font-semibold text-zinc-300 mb-2"
+                        >
+                          Parentesco (Opcional)
+                        </label>
+                        <input
+                          id="secondaryContactRelation"
+                          type="text"
+                          maxLength={50}
+                          value={secondaryContactRelation}
+                          onChange={(e) =>
+                            setSecondaryContactRelation(e.target.value)
+                          }
+                          placeholder="Ej. Hermano, Padre..."
+                          className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-4">
                         <label
                           htmlFor="secondaryContactPhone"
                           className="block text-xs font-semibold text-zinc-300 mb-2"

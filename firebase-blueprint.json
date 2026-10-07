@@ -107,9 +107,15 @@
         },
         "emergencyContactName": {
           "type": "string",
-          "description": "Full name and relationship of primary emergency contact.",
+          "description": "Full name of primary emergency contact.",
           "minLength": 2,
           "maxLength": 100
+        },
+        "emergencyContactRelation": {
+          "type": "string",
+          "description": "Relationship (parentesco) of primary emergency contact.",
+          "minLength": 1,
+          "maxLength": 50
         },
         "emergencyContactPhone": {
           "type": "string",
@@ -120,9 +126,15 @@
         },
         "secondaryContactName": {
           "type": "string",
-          "description": "Full name and relationship of secondary emergency contact.",
+          "description": "Full name of secondary emergency contact.",
           "minLength": 0,
           "maxLength": 100
+        },
+        "secondaryContactRelation": {
+          "type": "string",
+          "description": "Relationship (parentesco) of secondary emergency contact.",
+          "minLength": 0,
+          "maxLength": 50
         },
         "secondaryContactPhone": {
           "type": "string",
@@ -176,8 +188,10 @@
         "allergies",
         "medicalConditions",
         "emergencyContactName",
+        "emergencyContactRelation",
         "emergencyContactPhone",
         "secondaryContactName",
+        "secondaryContactRelation",
         "secondaryContactPhone",
         "motorcycleDetails",
         "insuranceDetails",
@@ -296,6 +310,14 @@
           "minLength": 2,
           "maxLength": 250
         },
+        "stickerCount": {
+          "type": "number",
+          "description": "Quantity of NFC stickers included in this package (1 to 10)."
+        },
+        "availableColors": {
+          "type": "array",
+          "description": "List of available sticker colors selectable by the customer for this package."
+        },
         "sortOrder": {
           "type": "number",
           "description": "Display order index (1, 2, 3)."
@@ -312,6 +334,8 @@
         "subtitle",
         "price",
         "specs",
+        "stickerCount",
+        "availableColors",
         "sortOrder",
         "updatedAt"
       ]

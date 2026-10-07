@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
 import {
   PhoneCall,
   AlertTriangle,
@@ -18,11 +17,16 @@ import {
   Search,
   Settings,
   LogOut,
+  Trash2,
 } from 'lucide-react';
 import {
   EmergencyStickerRecord,
   StickerPackageOption,
   DEFAULT_STICKER_PACKAGES,
+  ALL_STICKER_COLORS,
+  STICKER_COLOR_SWATCHES,
+  AUTHORIZED_ADMIN_EMAIL,
+  normalizePackageOption,
   buildUniqueStickerUrl,
 } from '../lib/firebase';
 
@@ -256,7 +260,12 @@ export const PublicEmergencyLandingPage: React.FC<PublicLandingProps> = ({
               <div className="text-lg font-bold text-white mt-1">
                 {sticker.emergencyContactName}
               </div>
-              <div className="text-sm font-mono tabular-nums text-zinc-300 mt-0.5">
+              {sticker.emergencyContactRelation && (
+                <div className="text-xs font-medium text-orange-300 mt-0.5">
+                  Parentesco: {sticker.emergencyContactRelation}
+                </div>
+              )}
+              <div className="text-sm font-mono tabular-nums text-zinc-300 mt-1">
                 {sticker.emergencyContactPhone}
               </div>
             </div>
@@ -280,7 +289,12 @@ export const PublicEmergencyLandingPage: React.FC<PublicLandingProps> = ({
                 <div className="text-lg font-bold text-white mt-1">
                   {sticker.secondaryContactName || 'Contacto Secundario'}
                 </div>
-                <div className="text-sm font-mono tabular-nums text-zinc-300 mt-0.5">
+                {sticker.secondaryContactRelation && (
+                  <div className="text-xs font-medium text-zinc-300 mt-0.5">
+                    Parentesco: {sticker.secondaryContactRelation}
+                  </div>
+                )}
+                <div className="text-sm font-mono tabular-nums text-zinc-300 mt-1">
                   {sticker.secondaryContactPhone || 'Teléfono no especificado'}
                 </div>
               </div>
@@ -323,8 +337,22 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
   onEditProfile,
 }) => {
   const activePackages =
-    packages && packages.length === 3 ? packages : DEFAULT_STICKER_PACKAGES;
+    packages && packages.length === 3
+      ? packages.map((p, idx) => normalizePackageOption(p, idx))
+      : DEFAULT_STICKER_PACKAGES;
   const [selectedPkgId, setSelectedPkgId] = useState<string>('pro');
+  const [selectedColors, setSelectedColors] = useState<string[]>([
+    'Rojo',
+    'Negro',
+    'Gris',
+    'Verde',
+    'Azul',
+    'Rosa',
+    'Morado',
+    'Amarillo',
+    'Rojo',
+    'Negro',
+  ]);
   const [shippingAddress, setShippingAddress] = useState('');
   const [shippingCity, setShippingCity] = useState('');
   const [shippingZip, setShippingZip] = useState('');
@@ -335,6 +363,34 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
     activePackages.find((p) => p.pkgId === selectedPkgId) ||
     activePackages[1] ||
     activePackages[0];
+
+  const stickerCount = Math.max(
+    1,
+    Math.min(10, Number(selectedPkg.stickerCount) || 1)
+  );
+  const availColors =
+    Array.isArray(selectedPkg.availableColors) &&
+    selectedPkg.availableColors.length > 0
+      ? selectedPkg.availableColors
+      : [...ALL_STICKER_COLORS];
+
+  const chosenColors: string[] = [];
+  for (let i = 0; i < stickerCount; i++) {
+    const candidate = selectedColors[i];
+    if (candidate && availColors.includes(candidate)) {
+      chosenColors.push(candidate);
+    } else {
+      chosenColors.push(availColors[i % availColors.length]);
+    }
+  }
+
+  const handleSelectColorForUnit = (unitIdx: number, colorName: string) => {
+    setSelectedColors((prev) => {
+      const next = [...prev];
+      next[unitIdx] = colorName;
+      return next;
+    });
+  };
 
   const handleConfirmPurchase = (e: React.FormEvent) => {
     e.preventDefault();
@@ -392,12 +448,14 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="bg-white p-2.5 rounded-xl shrink-0">
-                <QRCodeSVG value={sticker.tagId} size={92} level="M" />
+              <div className="w-16 h-16 rounded-xl bg-zinc-900 border border-orange-500/40 flex flex-col items-center justify-center shrink-0 text-orange-500">
+                <Wifi className="w-7 h-7" />
+                <span className="text-[10px] font-bold tracking-wider text-zinc-300 mt-0.5">
+                  NFC
+                </span>
               </div>
               <div className="space-y-1 min-w-0">
                 <div className="text-[11px] font-bold text-orange-500 flex items-center gap-1">
-                  <Wifi className="w-3.5 h-3.5" />
                   <span>STICKER DE EMERGENCIA</span>
                 </div>
                 <div className="text-base font-bold text-white truncate">
@@ -409,12 +467,46 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                 </div>
                 <div className="text-[11px] text-zinc-400 truncate">
                   Contacto 1: {sticker.emergencyContactName}
+                  {sticker.emergencyContactRelation
+                    ? ` (${sticker.emergencyContactRelation})`
+                    : ''}
                 </div>
                 {sticker.secondaryContactName && (
                   <div className="text-[11px] text-zinc-400 truncate">
                     Contacto 2: {sticker.secondaryContactName}
+                    {sticker.secondaryContactRelation
+                      ? ` (${sticker.secondaryContactRelation})`
+                      : ''}
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* Selected Colors Summary in Preview */}
+            <div className="pt-3 border-t border-zinc-800/80 space-y-2">
+              <div className="text-[11px] font-semibold text-zinc-300">
+                {chosenColors.length === 1
+                  ? 'Color de Sticker seleccionado:'
+                  : `Colores seleccionados (${chosenColors.length} stickers):`}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {chosenColors.map((colorName, idx) => (
+                  <span
+                    key={idx}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-200"
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0"
+                      style={{
+                        backgroundColor:
+                          STICKER_COLOR_SWATCHES[colorName] || '#f97316',
+                      }}
+                    />
+                    <span>
+                      #{idx + 1}: {colorName}
+                    </span>
+                  </span>
+                ))}
               </div>
             </div>
 
@@ -452,12 +544,22 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                 Hemos recibido tu pedido de <strong>{selectedPkg.name}</strong> vinculado al registro médico de <strong>{sticker.fullName}</strong>. Nuestro personal autorizado configurará tu tag NFC y lo enviará a tu domicilio.
               </p>
 
-              <div className="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1 text-xs text-zinc-300">
+              <div className="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1.5 text-xs text-zinc-300">
                 <div>
-                  <strong className="text-white">Paquete:</strong> {selectedPkg.name} (${selectedPkg.price} MXN)
+                  <strong className="text-white">Paquete:</strong>{' '}
+                  {selectedPkg.name} ({stickerCount}{' '}
+                  {stickerCount === 1 ? 'sticker' : 'stickers'} · $
+                  {selectedPkg.price} MXN)
                 </div>
                 <div>
-                  <strong className="text-white">Titular del Perfil:</strong> {sticker.fullName} ({sticker.bloodType})
+                  <strong className="text-white">Colores por Sticker:</strong>{' '}
+                  {chosenColors
+                    .map((c, i) => `Sticker #${i + 1}: ${c}`)
+                    .join(' · ')}
+                </div>
+                <div>
+                  <strong className="text-white">Titular del Perfil:</strong>{' '}
+                  {sticker.fullName} ({sticker.bloodType})
                 </div>
                 <div>
                   <strong className="text-white">Dirección de envío:</strong>{' '}
@@ -476,7 +578,7 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
               </div>
             </div>
           ) : (
-            <form onSubmit={handleConfirmPurchase} className="space-y-5">
+            <form onSubmit={handleConfirmPurchase} className="space-y-6">
               <div>
                 <label className="block text-xs font-bold text-zinc-300 mb-3">
                   1. Selecciona tu Opción de Compra de Tag NFC
@@ -484,6 +586,7 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                 <div className="grid grid-cols-1 gap-3">
                   {activePackages.map((pkg) => {
                     const active = pkg.pkgId === selectedPkgId;
+                    const count = Math.max(1, Number(pkg.stickerCount) || 1);
                     return (
                       <div
                         key={pkg.pkgId}
@@ -494,13 +597,16 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                             : 'bg-[#0B0C0E]/60 border-zinc-800 hover:border-zinc-700'
                         }`}
                       >
-                        <div className="space-y-0.5">
+                        <div className="space-y-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-bold text-white">
                               {pkg.name}
                             </span>
                             <span className="text-xs text-orange-400 font-medium">
                               · {pkg.subtitle}
+                            </span>
+                            <span className="text-xs font-mono tabular-nums text-zinc-300">
+                              · {count} {count === 1 ? 'Sticker' : 'Stickers'}
                             </span>
                           </div>
                           <p className="text-xs text-zinc-400">{pkg.specs}</p>
@@ -519,10 +625,72 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                 </div>
               </div>
 
+              {/* Per-Sticker Color Selector based on selectedPkg.stickerCount */}
+              <div className="space-y-3 pt-2 border-t border-zinc-800">
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300">
+                    2. Elige el Color de{' '}
+                    {chosenColors.length === 1
+                      ? 'tu Sticker NFC'
+                      : `cada uno de tus ${chosenColors.length} Stickers NFC`}
+                  </label>
+                  <p className="text-[11px] text-zinc-400 mt-0.5">
+                    {chosenColors.length === 1
+                      ? 'Este paquete incluye 1 sticker. Selecciona el color de tu preferencia:'
+                      : `Este paquete incluye ${chosenColors.length} stickers. Elige el color para cada uno:`}
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  {chosenColors.map((selectedColor, unitIdx) => (
+                    <div
+                      key={unitIdx}
+                      className="p-3.5 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-2.5"
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-white">
+                          Sticker #{unitIdx + 1}
+                        </span>
+                        <span className="text-orange-400 font-semibold">
+                          Color: {selectedColor}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {availColors.map((colorOption) => {
+                          const isSelected = selectedColor === colorOption;
+                          const hex =
+                            STICKER_COLOR_SWATCHES[colorOption] || '#f97316';
+                          return (
+                            <button
+                              key={colorOption}
+                              type="button"
+                              onClick={() =>
+                                handleSelectColorForUnit(unitIdx, colorOption)
+                              }
+                              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                                isSelected
+                                  ? 'bg-zinc-800 border-orange-500 text-white'
+                                  : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+                              }`}
+                            >
+                              <span
+                                className="w-3 h-3 rounded-full border border-white/25 shrink-0"
+                                style={{ backgroundColor: hex }}
+                              />
+                              <span>{colorOption}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <div className="space-y-4 pt-2 border-t border-zinc-800">
                 <div className="flex items-center gap-2 text-xs font-bold text-zinc-300">
                   <Truck className="w-4 h-4 text-orange-500" />
-                  <span>2. Datos de Envío para tu Sticker Físico</span>
+                  <span>3. Datos de Envío para tu Sticker Físico</span>
                 </div>
 
                 <div>
@@ -591,20 +759,42 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
 // 3. Authorized Personnel Login View ("Personal autorizado")
 // ============================================================================
 interface AdminLoginViewProps {
+  currentUserEmail?: string | null;
   onLoginSuccess: () => void;
   onCancel: () => void;
-  ensureFirebaseSignedIn: () => Promise<boolean>;
+  verifyAdminGoogleAccount: () => Promise<{ ok: boolean; error?: string }>;
 }
 
 export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
+  currentUserEmail,
   onLoginSuccess,
   onCancel,
-  ensureFirebaseSignedIn,
+  verifyAdminGoogleAccount,
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const isCurrentUserAdmin = Boolean(
+    currentUserEmail &&
+      currentUserEmail.toLowerCase() === AUTHORIZED_ADMIN_EMAIL
+  );
+
+  const handleGoogleVerifyOnly = async () => {
+    setError(null);
+    setLoading(true);
+    const res = await verifyAdminGoogleAccount();
+    setLoading(false);
+    if (!res.ok) {
+      setError(
+        res.error ||
+          `Acceso denegado. Solo se permite verificar con ${AUTHORIZED_ADMIN_EMAIL}.`
+      );
+      return;
+    }
+    onLoginSuccess();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -613,22 +803,23 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
     const cleanPass = password.trim();
 
     if (
-      (cleanUser === 'admin' || cleanUser === 'gami.rodrigo@gmail.com') &&
+      (cleanUser === 'admin' || cleanUser === AUTHORIZED_ADMIN_EMAIL) &&
       cleanPass === 'bikersafe2026'
     ) {
       setLoading(true);
-      const ok = await ensureFirebaseSignedIn();
+      const res = await verifyAdminGoogleAccount();
       setLoading(false);
-      if (!ok) {
+      if (!res.ok) {
         setError(
-          'Se requiere confirmar la sesión de Google autorizada para consultar la base de datos.'
+          res.error ||
+            `Acceso denegado. Solo se permite verificar con ${AUTHORIZED_ADMIN_EMAIL}.`
         );
         return;
       }
       onLoginSuccess();
     } else {
       setError(
-        'Usuario o contraseña incorrectos. Verifica tus credenciales de personal autorizado.'
+        'Credenciales incorrectas. Verifica tu correo autorizado y contraseña.'
       );
     }
   };
@@ -644,9 +835,25 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
           Administración Interna Biker Safe
         </h1>
         <p className="text-xs text-zinc-400 leading-relaxed">
-          Ingresa tus credenciales de personal autorizado para consultar todos los registros, obtener las URLs de programación de tags NFC y editar los paquetes de venta.
+          El acceso administrativo requiere verificación exclusiva con el correo personal autorizado de Google.
         </p>
       </div>
+
+      {currentUserEmail &&
+        (isCurrentUserAdmin ? (
+          <div className="p-3.5 bg-[#0B0C0E] border border-orange-500/50 rounded-xl text-xs text-zinc-200">
+            Sesión de Google verificada como administrador:{' '}
+            <strong className="text-orange-400 font-mono">
+              {currentUserEmail}
+            </strong>
+          </div>
+        ) : (
+          <div className="p-3.5 bg-red-950/40 border border-red-800/70 rounded-xl text-xs text-red-200">
+            La cuenta activa (
+            <strong className="font-mono">{currentUserEmail}</strong>) no tiene
+            permisos de administrador. Debes verificar con el correo autorizado.
+          </div>
+        ))}
 
       {error && (
         <div className="p-3.5 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
@@ -654,17 +861,35 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <div className="space-y-3">
+        <button
+          type="button"
+          disabled={loading}
+          onClick={handleGoogleVerifyOnly}
+          className="w-full py-3 px-5 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+        >
+          {loading
+            ? 'Verificando cuenta de Google...'
+            : isCurrentUserAdmin
+            ? 'Entrar con mi Correo Autorizado Verificado'
+            : 'Verificar con Cuenta de Google Autorizada'}
+        </button>
+      </div>
+
+      <form
+        onSubmit={handleSubmit}
+        className="space-y-4 pt-3 border-t border-zinc-800"
+      >
         <div>
           <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
-            Usuario o Correo Autorizado
+            Correo Autorizado
           </label>
           <input
             type="text"
             required
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            placeholder="admin o correo autorizado"
+            placeholder="Correo autorizado"
             className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
           />
         </div>
@@ -681,19 +906,14 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
             placeholder="••••••••••••"
             className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
           />
-          <span className="block text-[11px] text-zinc-500 mt-1.5 font-mono">
-            Credencial interna por defecto: admin / bikersafe2026
-          </span>
         </div>
 
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 px-5 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+          className="w-full py-2.5 px-5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
         >
-          {loading
-            ? 'Verificando acceso...'
-            : 'Ingresar al Panel de Administración'}
+          Validar Credenciales y Correo de Google
         </button>
       </form>
 
@@ -717,6 +937,7 @@ interface AdminDashboardViewProps {
   stickers: EmergencyStickerRecord[];
   packages: StickerPackageOption[];
   onSavePackages: (updated: StickerPackageOption[]) => Promise<void>;
+  onDeleteSticker: (sticker: EmergencyStickerRecord) => Promise<void>;
   onPreviewStickerLanding: (sticker: EmergencyStickerRecord) => void;
   onExitAdmin: () => void;
 }
@@ -725,18 +946,23 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   stickers,
   packages,
   onSavePackages,
+  onDeleteSticker,
   onPreviewStickerLanding,
   onExitAdmin,
 }) => {
   const [activeTab, setActiveTab] = useState<'records' | 'packages'>('records');
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedTagId, setCopiedTagId] = useState<string | null>(null);
+  const [confirmDeleteTagId, setConfirmDeleteTagId] = useState<string | null>(
+    null
+  );
+  const [deletingTagId, setDeletingTagId] = useState<string | null>(null);
   const [nfcMessage, setNfcMessage] = useState<string | null>(null);
 
   const [editablePackages, setEditablePackages] = useState<StickerPackageOption[]>(
     () =>
       (packages && packages.length === 3 ? packages : DEFAULT_STICKER_PACKAGES).map(
-        (p) => ({ ...p })
+        (p, idx) => normalizePackageOption(p, idx)
       )
   );
   const [savingPackages, setSavingPackages] = useState(false);
@@ -761,6 +987,20 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       setTimeout(() => setCopiedTagId(null), 2000);
     } catch {
       // Ignore
+    }
+  };
+
+  const handleConfirmDeleteRecord = async (sticker: EmergencyStickerRecord) => {
+    setDeletingTagId(sticker.tagId);
+    setNfcMessage(null);
+    try {
+      await onDeleteSticker(sticker);
+      setConfirmDeleteTagId(null);
+      setNfcMessage(
+        `Registro de ${sticker.fullName} (${sticker.tagId}) eliminado correctamente.`
+      );
+    } finally {
+      setDeletingTagId(null);
     }
   };
 
@@ -796,10 +1036,32 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   const handlePackageFieldChange = (
     idx: number,
     field: keyof StickerPackageOption,
-    value: string | number
+    value: string | number | string[]
   ) => {
     setEditablePackages((prev) =>
       prev.map((item, i) => (i === idx ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const handleTogglePackageColor = (idx: number, colorName: string) => {
+    setEditablePackages((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        const current =
+          Array.isArray(item.availableColors) && item.availableColors.length > 0
+            ? [...item.availableColors]
+            : [...ALL_STICKER_COLORS];
+        let nextColors: string[];
+        if (current.includes(colorName)) {
+          if (current.length <= 1) return item; // Keep at least 1 color enabled
+          nextColors = current.filter((c) => c !== colorName);
+        } else {
+          nextColors = ALL_STICKER_COLORS.filter(
+            (c) => current.includes(c) || c === colorName
+          );
+        }
+        return { ...item, availableColors: nextColors };
+      })
     );
   };
 
@@ -859,7 +1121,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 (packages && packages.length === 3
                   ? packages
                   : DEFAULT_STICKER_PACKAGES
-                ).map((p) => ({ ...p }))
+                ).map((p, idx) => normalizePackageOption(p, idx))
               );
               setPackagesSavedSuccess(false);
               setPackagesError(null);
@@ -961,25 +1223,87 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                     />
                   </div>
 
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                        Precio ($ MXN)
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min={1}
+                        max={100000}
+                        value={pkg.price}
+                        onChange={(e) =>
+                          handlePackageFieldChange(
+                            idx,
+                            'price',
+                            Number(e.target.value) || 1
+                          )
+                        }
+                        className="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-[#14161A] border border-zinc-800 rounded-lg text-orange-400 font-bold focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                        Cantidad de Stickers
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min={1}
+                        max={10}
+                        value={pkg.stickerCount || 1}
+                        onChange={(e) =>
+                          handlePackageFieldChange(
+                            idx,
+                            'stickerCount',
+                            Math.max(
+                              1,
+                              Math.min(10, Math.round(Number(e.target.value) || 1))
+                            )
+                          )
+                        }
+                        className="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-[#14161A] border border-zinc-800 rounded-lg text-white font-bold focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                  </div>
+
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-300 mb-1">
-                      Precio ($ MXN)
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                      Colores disponibles para elegir (
+                      {(pkg.availableColors || ALL_STICKER_COLORS).length})
                     </label>
-                    <input
-                      type="number"
-                      required
-                      min={1}
-                      max={100000}
-                      value={pkg.price}
-                      onChange={(e) =>
-                        handlePackageFieldChange(
-                          idx,
-                          'price',
-                          Number(e.target.value) || 1
-                        )
-                      }
-                      className="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-[#14161A] border border-zinc-800 rounded-lg text-orange-400 font-bold focus:outline-none focus:border-orange-500"
-                    />
+                    <div className="flex flex-wrap gap-1.5">
+                      {ALL_STICKER_COLORS.map((colorName) => {
+                        const enabled = (
+                          pkg.availableColors || ALL_STICKER_COLORS
+                        ).includes(colorName);
+                        const hex =
+                          STICKER_COLOR_SWATCHES[colorName] || '#f97316';
+                        return (
+                          <button
+                            key={colorName}
+                            type="button"
+                            onClick={() =>
+                              handleTogglePackageColor(idx, colorName)
+                            }
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                              enabled
+                                ? 'bg-zinc-800 border-orange-500 text-white'
+                                : 'bg-[#14161A] border-zinc-800/80 text-zinc-500 opacity-60 hover:opacity-100'
+                            }`}
+                          >
+                            <span
+                              className="w-2.5 h-2.5 rounded-full border border-white/25 shrink-0"
+                              style={{ backgroundColor: hex }}
+                            />
+                            <span>{colorName}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <div>
@@ -1071,7 +1395,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <button
                           type="button"
                           onClick={() => onPreviewStickerLanding(s)}
@@ -1088,6 +1412,39 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                           <Wifi className="w-3.5 h-3.5" />
                           <span>Grabar en Tag NFC Físico</span>
                         </button>
+                        {confirmDeleteTagId === s.tagId ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={deletingTagId === s.tagId}
+                              onClick={() => handleConfirmDeleteRecord(s)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>
+                                {deletingTagId === s.tagId
+                                  ? 'Borrando...'
+                                  : 'Confirmar Borrado'}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteTagId(null)}
+                              className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteTagId(s.tagId)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-950/70 hover:bg-red-900/80 border border-red-800/70 text-red-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Borrar Registro</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -1103,7 +1460,11 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         <span className="text-zinc-500 block">
                           Contacto Principal (1):
                         </span>
-                        <strong>{s.emergencyContactName}</strong> (
+                        <strong>{s.emergencyContactName}</strong>
+                        {s.emergencyContactRelation
+                          ? ` · ${s.emergencyContactRelation}`
+                          : ''}{' '}
+                        (
                         <span className="font-mono tabular-nums">
                           {s.emergencyContactPhone}
                         </span>
@@ -1117,7 +1478,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                           <>
                             <strong>
                               {s.secondaryContactName || 'Contacto 2'}
-                            </strong>{' '}
+                            </strong>
+                            {s.secondaryContactRelation
+                              ? ` · ${s.secondaryContactRelation}`
+                              : ''}{' '}
                             (
                             <span className="font-mono tabular-nums">
                               {s.secondaryContactPhone || '-'}

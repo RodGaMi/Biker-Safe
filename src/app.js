@@ -18,6 +18,7 @@ import {
   getDocFromServer,
   setDoc,
   updateDoc,
+  deleteDoc,
   collection,
   query,
   where,
@@ -101,11 +102,37 @@ const SCHEMA_CONSTRAINTS = {
   allergies: { minLength: 0, maxLength: 500 },
   medicalConditions: { minLength: 0, maxLength: 1000 },
   emergencyContactName: { minLength: 2, maxLength: 100 },
+  emergencyContactRelation: { minLength: 1, maxLength: 50 },
   emergencyContactPhone: { minLength: 5, maxLength: 30 },
   secondaryContactName: { minLength: 0, maxLength: 100 },
+  secondaryContactRelation: { minLength: 0, maxLength: 50 },
   secondaryContactPhone: { minLength: 0, maxLength: 30 },
   motorcycleDetails: { minLength: 0, maxLength: 150 },
   insuranceDetails: { minLength: 0, maxLength: 150 },
+};
+
+const AUTHORIZED_ADMIN_EMAIL = 'gami.rodrigo@gmail.com';
+
+const ALL_STICKER_COLORS = [
+  'Rojo',
+  'Negro',
+  'Gris',
+  'Verde',
+  'Azul',
+  'Rosa',
+  'Morado',
+  'Amarillo',
+];
+
+const STICKER_COLOR_SWATCHES = {
+  Rojo: '#EF4444',
+  Negro: '#18181B',
+  Gris: '#71717A',
+  Verde: '#22C55E',
+  Azul: '#3B82F6',
+  Rosa: '#EC4899',
+  Morado: '#A855F7',
+  Amarillo: '#EAB308',
 };
 
 const DEFAULT_STICKER_PACKAGES = [
@@ -114,15 +141,19 @@ const DEFAULT_STICKER_PACKAGES = [
     name: 'Kit Individual Casco NFC',
     subtitle: 'Para 1 casco principal',
     price: 249,
-    specs: '1 Sticker NFC NTAG213 · Acabado Carbono + Naranja · Resina 3M IP68',
+    specs: '1 Sticker NFC NTAG213 · Acabado Resina 3M IP68',
+    stickerCount: 1,
+    availableColors: [...ALL_STICKER_COLORS],
     sortOrder: 1,
   },
   {
     pkgId: 'pro',
     name: 'Kit Biker Safe Pro',
-    subtitle: 'Más elegido · Casco + Moto',
+    subtitle: 'Más elegido · 2 Stickers NFC',
     price: 399,
-    specs: '2 Stickers NFC para Casco + 1 Sticker NFC Reflejante para Chasis',
+    specs: '2 Stickers NFC para Casco / Moto · Color elegible por unidad',
+    stickerCount: 2,
+    availableColors: [...ALL_STICKER_COLORS],
     sortOrder: 2,
   },
   {
@@ -130,10 +161,39 @@ const DEFAULT_STICKER_PACKAGES = [
     name: 'Kit Dúo / Rodada',
     subtitle: 'Cobertura en múltiples cascos',
     price: 649,
-    specs: '4 Stickers NFC NTAG215 Programados con tu URL única de emergencia',
+    specs: '4 Stickers NFC NTAG215 Programados con tu perfil médico',
+    stickerCount: 4,
+    availableColors: [...ALL_STICKER_COLORS],
     sortOrder: 3,
   },
 ];
+
+function normalizePackageOption(raw, fallbackIndex = 0) {
+  const fallback =
+    DEFAULT_STICKER_PACKAGES.find((p) => p.pkgId === raw?.pkgId) ||
+    DEFAULT_STICKER_PACKAGES[fallbackIndex] ||
+    DEFAULT_STICKER_PACKAGES[0];
+
+  const validColors = Array.isArray(raw?.availableColors)
+    ? raw.availableColors.filter((c) => ALL_STICKER_COLORS.includes(c))
+    : [];
+
+  return {
+    pkgId: raw?.pkgId || fallback.pkgId,
+    name: raw?.name || fallback.name,
+    subtitle: raw?.subtitle || fallback.subtitle,
+    price: typeof raw?.price === 'number' && raw.price >= 1 ? raw.price : fallback.price,
+    specs: raw?.specs || fallback.specs,
+    stickerCount:
+      typeof raw?.stickerCount === 'number' &&
+      raw.stickerCount >= 1 &&
+      raw.stickerCount <= 10
+        ? Math.round(raw.stickerCount)
+        : fallback.stickerCount,
+    availableColors: validColors.length > 0 ? validColors : [...ALL_STICKER_COLORS],
+    sortOrder: typeof raw?.sortOrder === 'number' ? raw.sortOrder : fallback.sortOrder,
+  };
+}
 
 function generateUniqueTagId() {
   const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
@@ -188,6 +248,13 @@ function sanitizeAndValidateStickerInput(input) {
     return { valid: false, error: 'Por favor ingresa el nombre del contacto de emergencia principal.' };
   }
 
+  const emergencyContactRelation = String(input.emergencyContactRelation || '')
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.emergencyContactRelation.maxLength);
+  if (emergencyContactRelation.length < SCHEMA_CONSTRAINTS.emergencyContactRelation.minLength) {
+    return { valid: false, error: 'Por favor ingresa el parentesco del contacto de emergencia principal.' };
+  }
+
   const emergencyContactPhone = String(input.emergencyContactPhone || '')
     .trim()
     .slice(0, SCHEMA_CONSTRAINTS.emergencyContactPhone.maxLength);
@@ -204,6 +271,9 @@ function sanitizeAndValidateStickerInput(input) {
   const secondaryContactName = String(input.secondaryContactName || '')
     .trim()
     .slice(0, SCHEMA_CONSTRAINTS.secondaryContactName.maxLength);
+  const secondaryContactRelation = String(input.secondaryContactRelation || '')
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.secondaryContactRelation.maxLength);
   const secondaryContactPhone = String(input.secondaryContactPhone || '')
     .trim()
     .slice(0, SCHEMA_CONSTRAINTS.secondaryContactPhone.maxLength);
@@ -235,8 +305,10 @@ function sanitizeAndValidateStickerInput(input) {
       allergies,
       medicalConditions,
       emergencyContactName,
+      emergencyContactRelation,
       emergencyContactPhone,
       secondaryContactName,
+      secondaryContactRelation,
       secondaryContactPhone,
       motorcycleDetails,
       insuranceDetails,
@@ -256,8 +328,10 @@ function buildUniqueStickerUrl(sticker) {
     a: sticker.allergies,
     m: sticker.medicalConditions,
     cn: sticker.emergencyContactName,
+    cr: sticker.emergencyContactRelation || '',
     cp: sticker.emergencyContactPhone,
     scn: sticker.secondaryContactName || '',
+    scr: sticker.secondaryContactRelation || '',
     scp: sticker.secondaryContactPhone || '',
     mc: sticker.motorcycleDetails,
     ins: sticker.insuranceDetails,
@@ -280,8 +354,10 @@ function parseEncodedStickerPacket(encoded) {
       allergies: typeof parsed.a === 'string' ? parsed.a : '',
       medicalConditions: typeof parsed.m === 'string' ? parsed.m : '',
       emergencyContactName: typeof parsed.cn === 'string' ? parsed.cn : '',
+      emergencyContactRelation: typeof parsed.cr === 'string' ? parsed.cr : '',
       emergencyContactPhone: typeof parsed.cp === 'string' ? parsed.cp : '',
       secondaryContactName: typeof parsed.scn === 'string' ? parsed.scn : '',
+      secondaryContactRelation: typeof parsed.scr === 'string' ? parsed.scr : '',
       secondaryContactPhone: typeof parsed.scp === 'string' ? parsed.scp : '',
       motorcycleDetails: typeof parsed.mc === 'string' ? parsed.mc : '',
       insuranceDetails: typeof parsed.ins === 'string' ? parsed.ins : '',
@@ -356,8 +432,10 @@ const state = {
   allergies: '',
   medicalConditions: '',
   emergencyContactName: '',
+  emergencyContactRelation: '',
   emergencyContactPhone: '',
   secondaryContactName: '',
+  secondaryContactRelation: '',
   secondaryContactPhone: '',
   motorcycleDetails: '',
   insuranceDetails: '',
@@ -370,11 +448,15 @@ const state = {
   saveSuccessBanner: false,
 
   // Dynamic Sticker Packages (Editable by Admin)
-  packages: DEFAULT_STICKER_PACKAGES.map((p) => ({ ...p })),
+  packages: DEFAULT_STICKER_PACKAGES.map((p) => ({
+    ...p,
+    availableColors: [...p.availableColors],
+  })),
   packagesLoadedFromDb: false,
 
   // Checkout state
   selectedPkgId: 'pro',
+  selectedStickerColors: ['Rojo', 'Negro', 'Gris', 'Verde', 'Azul', 'Rosa', 'Morado', 'Amarillo', 'Rojo', 'Negro'],
   shippingAddress: '',
   shippingCity: '',
   shippingZip: '',
@@ -397,6 +479,8 @@ const state = {
   adminAllStickers: [],
   adminSearchQuery: '',
   adminCopiedTagId: null,
+  adminConfirmDeleteTagId: null,
+  adminDeletingTagId: null,
   adminNfcMessage: null,
   adminSavingPackages: false,
   adminPackagesSavedSuccess: false,
@@ -427,11 +511,15 @@ async function syncUserPrivateProfile(user) {
   }
 }
 
-async function handleGoogleSignIn() {
+async function handleGoogleSignIn(forceAccountSelection = false) {
   state.formError = null;
   renderApp();
   try {
-    const result = await signInWithPopup(auth, googleProvider);
+    const provider = new GoogleAuthProvider();
+    if (forceAccountSelection) {
+      provider.setCustomParameters({ prompt: 'select_account' });
+    }
+    const result = await signInWithPopup(auth, provider);
     await syncUserPrivateProfile(result.user);
     return result.user;
   } catch (err) {
@@ -442,6 +530,33 @@ async function handleGoogleSignIn() {
     renderApp();
     return null;
   }
+}
+
+function isAuthorizedAdminUser(user) {
+  return Boolean(
+    user &&
+      user.emailVerified &&
+      user.email &&
+      user.email.toLowerCase() === AUTHORIZED_ADMIN_EMAIL
+  );
+}
+
+function getSelectedColorsForPackage(pkg) {
+  const count = Math.max(1, Math.min(10, Number(pkg?.stickerCount) || 1));
+  const avail =
+    Array.isArray(pkg?.availableColors) && pkg.availableColors.length > 0
+      ? pkg.availableColors
+      : ALL_STICKER_COLORS;
+  const result = [];
+  for (let i = 0; i < count; i++) {
+    const chosen = state.selectedStickerColors[i];
+    if (chosen && avail.includes(chosen)) {
+      result.push(chosen);
+    } else {
+      result.push(avail[i % avail.length]);
+    }
+  }
+  return result;
 }
 
 async function handleSignOut() {
@@ -467,7 +582,7 @@ function subscribeToPackages() {
         });
         loaded.sort((a, b) => (a.sortOrder || 1) - (b.sortOrder || 1));
         if (loaded.length === 3) {
-          state.packages = loaded;
+          state.packages = loaded.map((item, idx) => normalizePackageOption(item, idx));
           state.packagesLoadedFromDb = true;
           renderApp();
         }
@@ -496,7 +611,9 @@ function subscribeToAllStickersForAdmin() {
         const raw = docSnap.data();
         all.push({
           ...raw,
+          emergencyContactRelation: raw.emergencyContactRelation || '',
           secondaryContactName: raw.secondaryContactName || '',
+          secondaryContactRelation: raw.secondaryContactRelation || '',
           secondaryContactPhone: raw.secondaryContactPhone || '',
         });
       });
@@ -522,7 +639,9 @@ async function fetchPublicSticker(tagId) {
       const data = snap.data();
       state.landingSticker = {
         ...data,
+        emergencyContactRelation: data.emergencyContactRelation || '',
         secondaryContactName: data.secondaryContactName || '',
+        secondaryContactRelation: data.secondaryContactRelation || '',
         secondaryContactPhone: data.secondaryContactPhone || '',
       };
     }
@@ -550,7 +669,9 @@ function subscribeToUserSticker(user) {
         const raw = docSnap.data();
         records.push({
           ...raw,
+          emergencyContactRelation: raw.emergencyContactRelation || '',
           secondaryContactName: raw.secondaryContactName || '',
+          secondaryContactRelation: raw.secondaryContactRelation || '',
           secondaryContactPhone: raw.secondaryContactPhone || '',
         });
       });
@@ -566,8 +687,10 @@ function subscribeToUserSticker(user) {
           state.allergies = primaryRecord.allergies || '';
           state.medicalConditions = primaryRecord.medicalConditions || '';
           state.emergencyContactName = primaryRecord.emergencyContactName || '';
+          state.emergencyContactRelation = primaryRecord.emergencyContactRelation || '';
           state.emergencyContactPhone = primaryRecord.emergencyContactPhone || '';
           state.secondaryContactName = primaryRecord.secondaryContactName || '';
+          state.secondaryContactRelation = primaryRecord.secondaryContactRelation || '';
           state.secondaryContactPhone = primaryRecord.secondaryContactPhone || '';
           state.motorcycleDetails = primaryRecord.motorcycleDetails || '';
           state.insuranceDetails = primaryRecord.insuranceDetails || '';
@@ -583,6 +706,9 @@ function subscribeToUserSticker(user) {
         } else if (state.landingTagId === primaryRecord.tagId) {
           state.landingSticker = primaryRecord;
         }
+      } else {
+        state.userSticker = null;
+        state.currentTagId = null;
       }
       renderApp();
     },
@@ -795,7 +921,12 @@ function renderPublicLandingView() {
             <div>
               <span class="text-[11px] font-semibold text-orange-400">CONTACTO DE EMERGENCIA 1 (PRINCIPAL)</span>
               <div class="text-lg font-bold text-white mt-1">${escapeHtml(sticker.emergencyContactName)}</div>
-              <div class="text-sm font-mono tabular-nums text-zinc-300 mt-0.5">${escapeHtml(sticker.emergencyContactPhone)}</div>
+              ${
+                sticker.emergencyContactRelation
+                  ? `<div class="text-xs font-medium text-orange-300 mt-0.5">Parentesco: ${escapeHtml(sticker.emergencyContactRelation)}</div>`
+                  : ''
+              }
+              <div class="text-sm font-mono tabular-nums text-zinc-300 mt-1">${escapeHtml(sticker.emergencyContactPhone)}</div>
             </div>
 
             <a href="tel:${escapeHtml(String(sticker.emergencyContactPhone || '').replace(/\s+/g, ''))}" class="w-full py-3 px-4 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors">
@@ -811,7 +942,12 @@ function renderPublicLandingView() {
               <div>
                 <span class="text-[11px] font-semibold text-zinc-400">CONTACTO DE EMERGENCIA 2 (SECUNDARIO)</span>
                 <div class="text-lg font-bold text-white mt-1">${escapeHtml(sticker.secondaryContactName || 'Contacto Secundario')}</div>
-                <div class="text-sm font-mono tabular-nums text-zinc-300 mt-0.5">${escapeHtml(sticker.secondaryContactPhone || 'Teléfono no especificado')}</div>
+                ${
+                  sticker.secondaryContactRelation
+                    ? `<div class="text-xs font-medium text-zinc-300 mt-0.5">Parentesco: ${escapeHtml(sticker.secondaryContactRelation)}</div>`
+                    : ''
+                }
+                <div class="text-sm font-mono tabular-nums text-zinc-300 mt-1">${escapeHtml(sticker.secondaryContactPhone || 'Teléfono no especificado')}</div>
               </div>
               ${
                 sticker.secondaryContactPhone
@@ -841,6 +977,11 @@ function renderStickerCheckoutStep() {
 
   const selectedPkg =
     state.packages.find((p) => p.pkgId === state.selectedPkgId) || state.packages[1] || state.packages[0];
+  const chosenColors = getSelectedColorsForPackage(selectedPkg);
+  const availColors =
+    Array.isArray(selectedPkg.availableColors) && selectedPkg.availableColors.length > 0
+      ? selectedPkg.availableColors
+      : ALL_STICKER_COLORS;
 
   return `
     <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-8">
@@ -880,8 +1021,14 @@ function renderStickerCheckoutStep() {
             </div>
 
             <div class="flex items-center gap-4">
-              <div class="bg-white p-2.5 rounded-xl shrink-0">
-                ${renderDeterministicQrSvg(sticker.tagId, 92)}
+              <div class="w-16 h-16 rounded-xl bg-zinc-900 border border-orange-500/40 flex flex-col items-center justify-center shrink-0 text-orange-500">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-7 h-7" aria-hidden="true">
+                  <path d="M5 12.55a11 11 0 0 1 14.08 0" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M1.42 9a16 16 0 0 1 21.16 0" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M8.53 16.11a6 6 0 0 1 6.95 0" stroke-linecap="round" stroke-linejoin="round"/>
+                  <circle cx="12" cy="20" r="1" fill="currentColor"/>
+                </svg>
+                <span class="text-[10px] font-bold tracking-wider text-zinc-300 mt-0.5">NFC</span>
               </div>
               <div class="space-y-1 min-w-0">
                 <div class="text-[11px] font-bold text-orange-500">STICKER DE EMERGENCIA</div>
@@ -890,13 +1037,32 @@ function renderStickerCheckoutStep() {
                   Tipo de Sangre: <strong class="text-orange-400">${escapeHtml(sticker.bloodType)}</strong>
                 </div>
                 <div class="text-[11px] text-zinc-400 truncate">
-                  Contacto 1: ${escapeHtml(sticker.emergencyContactName)}
+                  Contacto 1: ${escapeHtml(sticker.emergencyContactName)}${sticker.emergencyContactRelation ? ` (${escapeHtml(sticker.emergencyContactRelation)})` : ''}
                 </div>
                 ${
                   sticker.secondaryContactName
-                    ? `<div class="text-[11px] text-zinc-400 truncate">Contacto 2: ${escapeHtml(sticker.secondaryContactName)}</div>`
+                    ? `<div class="text-[11px] text-zinc-400 truncate">Contacto 2: ${escapeHtml(sticker.secondaryContactName)}${sticker.secondaryContactRelation ? ` (${escapeHtml(sticker.secondaryContactRelation)})` : ''}</div>`
                     : ''
                 }
+              </div>
+            </div>
+
+            <!-- Selected Colors Summary in Preview -->
+            <div class="pt-3 border-t border-zinc-800/80 space-y-2">
+              <div class="text-[11px] font-semibold text-zinc-300">
+                ${chosenColors.length === 1 ? 'Color de Sticker seleccionado:' : `Colores seleccionados (${chosenColors.length} stickers):`}
+              </div>
+              <div class="flex flex-wrap gap-1.5">
+                ${chosenColors
+                  .map(
+                    (colorName, idx) => `
+                  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-200">
+                    <span class="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0" style="background-color: ${STICKER_COLOR_SWATCHES[colorName] || '#f97316'}"></span>
+                    <span>#${idx + 1}: ${escapeHtml(colorName)}</span>
+                  </span>
+                `
+                  )
+                  .join('')}
               </div>
             </div>
 
@@ -927,8 +1093,9 @@ function renderStickerCheckoutStep() {
                 Hemos recibido tu pedido de <strong>${escapeHtml(selectedPkg.name)}</strong> vinculado al registro médico de <strong>${escapeHtml(sticker.fullName)}</strong>. Nuestro personal autorizado configurará tu tag NFC y lo enviará a tu domicilio.
               </p>
 
-              <div class="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1 text-xs text-zinc-300">
-                <div><strong class="text-white">Paquete:</strong> ${escapeHtml(selectedPkg.name)} ($${selectedPkg.price} MXN)</div>
+              <div class="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1.5 text-xs text-zinc-300">
+                <div><strong class="text-white">Paquete:</strong> ${escapeHtml(selectedPkg.name)} (${selectedPkg.stickerCount} ${selectedPkg.stickerCount === 1 ? 'sticker' : 'stickers'} · $${selectedPkg.price} MXN)</div>
+                <div><strong class="text-white">Colores por Sticker:</strong> ${chosenColors.map((c, i) => `Sticker #${i + 1}: ${escapeHtml(c)}`).join(' · ')}</div>
                 <div><strong class="text-white">Titular del Perfil:</strong> ${escapeHtml(sticker.fullName)} (${escapeHtml(sticker.bloodType)})</div>
                 <div><strong class="text-white">Dirección de envío:</strong> ${escapeHtml(state.shippingAddress)}, ${escapeHtml(state.shippingCity)} C.P. ${escapeHtml(state.shippingZip)}</div>
               </div>
@@ -941,7 +1108,7 @@ function renderStickerCheckoutStep() {
             </div>
           `
               : `
-            <form id="sticker-purchase-form" class="space-y-5">
+            <form id="sticker-purchase-form" class="space-y-6">
               <div>
                 <label class="block text-xs font-bold text-zinc-300 mb-3">
                   1. Selecciona tu Opción de Compra de Tag NFC
@@ -950,16 +1117,18 @@ function renderStickerCheckoutStep() {
                   ${state.packages
                     .map((pkg) => {
                       const active = pkg.pkgId === state.selectedPkgId;
+                      const count = Math.max(1, Number(pkg.stickerCount) || 1);
                       return `
                       <div data-pkg-id="${escapeHtml(pkg.pkgId)}" class="pkg-option-card p-4 rounded-xl border transition-colors cursor-pointer flex items-center justify-between gap-4 ${
                         active
                           ? 'bg-[#0B0C0E] border-orange-500'
                           : 'bg-[#0B0C0E]/60 border-zinc-800 hover:border-zinc-700'
                       }">
-                        <div class="space-y-0.5">
+                        <div class="space-y-1">
                           <div class="flex items-center gap-2 flex-wrap">
                             <span class="text-sm font-bold text-white">${escapeHtml(pkg.name)}</span>
                             <span class="text-xs text-orange-400 font-medium">· ${escapeHtml(pkg.subtitle)}</span>
+                            <span class="text-xs font-mono tabular-nums text-zinc-300">· ${count} ${count === 1 ? 'Sticker' : 'Stickers'}</span>
                           </div>
                           <p class="text-xs text-zinc-400">${escapeHtml(pkg.specs)}</p>
                         </div>
@@ -974,9 +1143,63 @@ function renderStickerCheckoutStep() {
                 </div>
               </div>
 
+              <!-- Per-Sticker Color Selector based on selectedPkg.stickerCount -->
+              <div class="space-y-3 pt-2 border-t border-zinc-800">
+                <div>
+                  <label class="block text-xs font-bold text-zinc-300">
+                    2. Elige el Color de ${chosenColors.length === 1 ? 'tu Sticker NFC' : `cada uno de tus ${chosenColors.length} Stickers NFC`}
+                  </label>
+                  <p class="text-[11px] text-zinc-400 mt-0.5">
+                    ${
+                      chosenColors.length === 1
+                        ? 'Este paquete incluye 1 sticker. Selecciona el color de tu preferencia:'
+                        : `Este paquete incluye ${chosenColors.length} stickers. Elige el color para cada uno:`
+                    }
+                  </p>
+                </div>
+
+                <div class="space-y-3">
+                  ${chosenColors
+                    .map(
+                      (selectedColor, unitIdx) => `
+                    <div class="p-3.5 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-2.5">
+                      <div class="flex items-center justify-between text-xs">
+                        <span class="font-bold text-white">Sticker #${unitIdx + 1}</span>
+                        <span class="text-orange-400 font-semibold">Color: ${escapeHtml(selectedColor)}</span>
+                      </div>
+                      <div class="flex flex-wrap gap-2">
+                        ${availColors
+                          .map((colorOption) => {
+                            const isSelected = selectedColor === colorOption;
+                            const hex = STICKER_COLOR_SWATCHES[colorOption] || '#f97316';
+                            return `
+                            <button
+                              type="button"
+                              data-sticker-unit="${unitIdx}"
+                              data-sticker-color="${escapeHtml(colorOption)}"
+                              class="sticker-color-choice-btn inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                                isSelected
+                                  ? 'bg-zinc-800 border-orange-500 text-white'
+                                  : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+                              }"
+                            >
+                              <span class="w-3 h-3 rounded-full border border-white/25 shrink-0" style="background-color: ${hex}"></span>
+                              <span>${escapeHtml(colorOption)}</span>
+                            </button>
+                          `;
+                          })
+                          .join('')}
+                      </div>
+                    </div>
+                  `
+                    )
+                    .join('')}
+                </div>
+              </div>
+
               <div class="space-y-4 pt-2 border-t border-zinc-800">
                 <div class="text-xs font-bold text-zinc-300">
-                  2. Datos de Envío para tu Sticker Físico
+                  3. Datos de Envío para tu Sticker Físico
                 </div>
 
                 <div>
@@ -1109,26 +1332,36 @@ function renderProfileFormStep() {
           <h2 class="text-base font-bold text-white">Contactos de Emergencia</h2>
 
           <!-- Contacto Principal -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            <div>
+          <div class="grid grid-cols-1 sm:grid-cols-12 gap-4">
+            <div class="sm:col-span-5">
               <label for="emergencyContactName" class="block text-xs font-semibold text-zinc-300 mb-2">Nombre del Contacto Principal</label>
-              <input id="emergencyContactName" type="text" required maxlength="100" value="${escapeHtml(state.emergencyContactName)}" placeholder="Ej. María (Esposa)" class="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+              <input id="emergencyContactName" type="text" required maxlength="100" value="${escapeHtml(state.emergencyContactName)}" placeholder="Ej. María González" class="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
             </div>
 
-            <div>
+            <div class="sm:col-span-3">
+              <label for="emergencyContactRelation" class="block text-xs font-semibold text-zinc-300 mb-2">Parentesco</label>
+              <input id="emergencyContactRelation" type="text" required maxlength="50" value="${escapeHtml(state.emergencyContactRelation)}" placeholder="Ej. Esposa, Madre..." class="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+            </div>
+
+            <div class="sm:col-span-4">
               <label for="emergencyContactPhone" class="block text-xs font-semibold text-zinc-300 mb-2">Teléfono Principal</label>
               <input id="emergencyContactPhone" type="tel" required maxlength="30" value="${escapeHtml(state.emergencyContactPhone)}" placeholder="+52 55 1234 5678" class="w-full px-4 py-2.5 text-sm font-mono tabular-nums text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 placeholder:font-sans focus:outline-none focus:border-orange-500" />
             </div>
           </div>
 
           <!-- Segundo Contacto de Emergencia -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-1">
-            <div>
+          <div class="grid grid-cols-1 sm:grid-cols-12 gap-4 pt-1">
+            <div class="sm:col-span-5">
               <label for="secondaryContactName" class="block text-xs font-semibold text-zinc-300 mb-2">Nombre del Segundo Contacto (Opcional)</label>
-              <input id="secondaryContactName" type="text" maxlength="100" value="${escapeHtml(state.secondaryContactName)}" placeholder="Ej. Carlos Rojas (Hermano / Padre)" class="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+              <input id="secondaryContactName" type="text" maxlength="100" value="${escapeHtml(state.secondaryContactName)}" placeholder="Ej. Carlos Rojas" class="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
             </div>
 
-            <div>
+            <div class="sm:col-span-3">
+              <label for="secondaryContactRelation" class="block text-xs font-semibold text-zinc-300 mb-2">Parentesco (Opcional)</label>
+              <input id="secondaryContactRelation" type="text" maxlength="50" value="${escapeHtml(state.secondaryContactRelation)}" placeholder="Ej. Hermano, Padre..." class="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+            </div>
+
+            <div class="sm:col-span-4">
               <label for="secondaryContactPhone" class="block text-xs font-semibold text-zinc-300 mb-2">Teléfono del Segundo Contacto (Opcional)</label>
               <input id="secondaryContactPhone" type="tel" maxlength="30" value="${escapeHtml(state.secondaryContactPhone)}" placeholder="+52 55 8765 4321" class="w-full px-4 py-2.5 text-sm font-mono tabular-nums text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 placeholder:font-sans focus:outline-none focus:border-orange-500" />
             </div>
@@ -1188,6 +1421,8 @@ function renderProfileFormStep() {
 // 5. Internal Admin Login & Admin Panel Views ("Personal autorizado")
 // ============================================================================
 function renderAdminLoginView() {
+  const isCurrentUserAdmin = isAuthorizedAdminUser(state.user);
+
   return `
     <div class="max-w-md mx-auto my-8 bg-[#14161A] border border-zinc-800 rounded-2xl p-8 space-y-6">
       <div class="space-y-1.5">
@@ -1198,9 +1433,25 @@ function renderAdminLoginView() {
           Administración Interna Biker Safe
         </h1>
         <p class="text-xs text-zinc-400 leading-relaxed">
-          Ingresa tus credenciales de personal autorizado para consultar todos los registros, obtener las URLs de programación de tags NFC y editar los paquetes de venta.
+          El acceso administrativo requiere verificación exclusiva con el correo personal autorizado de Google.
         </p>
       </div>
+
+      ${
+        state.user
+          ? isCurrentUserAdmin
+            ? `
+          <div class="p-3.5 bg-[#0B0C0E] border border-orange-500/50 rounded-xl text-xs text-zinc-200">
+            Sesión de Google verificada como administrador: <strong class="text-orange-400 font-mono">${escapeHtml(state.user.email)}</strong>
+          </div>
+        `
+            : `
+          <div class="p-3.5 bg-red-950/40 border border-red-800/70 rounded-xl text-xs text-red-200">
+            La cuenta activa (<strong class="font-mono">${escapeHtml(state.user.email)}</strong>) no tiene permisos de administrador. Debes verificar con el correo autorizado.
+          </div>
+        `
+          : ''
+      }
 
       ${
         state.adminLoginError
@@ -1212,17 +1463,31 @@ function renderAdminLoginView() {
           : ''
       }
 
-      <form id="admin-login-form" class="space-y-4">
+      <div class="space-y-3">
+        <button
+          type="button"
+          id="admin-google-verify-btn"
+          class="w-full py-3 px-5 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+        >
+          ${
+            isCurrentUserAdmin
+              ? 'Entrar con mi Correo Autorizado Verificado'
+              : 'Verificar con Cuenta de Google Autorizada'
+          }
+        </button>
+      </div>
+
+      <form id="admin-login-form" class="space-y-4 pt-3 border-t border-zinc-800">
         <div>
           <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
-            Usuario o Correo Autorizado
+            Correo Autorizado
           </label>
           <input
             type="text"
             id="admin-username-input"
             required
             value="${escapeHtml(state.adminUsernameInput)}"
-            placeholder="admin o correo autorizado"
+            placeholder="Correo autorizado"
             class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
           />
         </div>
@@ -1239,16 +1504,13 @@ function renderAdminLoginView() {
             placeholder="••••••••••••"
             class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
           />
-          <span class="block text-[11px] text-zinc-500 mt-1.5 font-mono">
-            Credencial interna por defecto: admin / bikersafe2026
-          </span>
         </div>
 
         <button
           type="submit"
-          class="w-full py-3 px-5 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+          class="w-full py-2.5 px-5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
         >
-          Ingresar al Panel de Administración
+          Validar Credenciales y Correo de Google
         </button>
       </form>
 
@@ -1398,19 +1660,63 @@ function renderAdminPanelView() {
                     />
                   </div>
 
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label class="block text-xs font-semibold text-zinc-300 mb-1">
+                        Precio ($ MXN)
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="1"
+                        max="100000"
+                        id="pkg-price-${idx}"
+                        value="${Number(pkg.price)}"
+                        class="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-[#14161A] border border-zinc-800 rounded-lg text-orange-400 font-bold focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label class="block text-xs font-semibold text-zinc-300 mb-1">
+                        Cantidad de Stickers
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="1"
+                        max="10"
+                        id="pkg-count-${idx}"
+                        value="${Number(pkg.stickerCount || 1)}"
+                        class="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-[#14161A] border border-zinc-800 rounded-lg text-white font-bold focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                  </div>
+
                   <div>
-                    <label class="block text-xs font-semibold text-zinc-300 mb-1">
-                      Precio ($ MXN)
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                      Colores disponibles para elegir (${(pkg.availableColors || ALL_STICKER_COLORS).length})
                     </label>
-                    <input
-                      type="number"
-                      required
-                      min="1"
-                      max="100000"
-                      id="pkg-price-${idx}"
-                      value="${Number(pkg.price)}"
-                      class="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-[#14161A] border border-zinc-800 rounded-lg text-orange-400 font-bold focus:outline-none focus:border-orange-500"
-                    />
+                    <div class="flex flex-wrap gap-1.5">
+                      ${ALL_STICKER_COLORS.map((colorName) => {
+                        const enabled = (pkg.availableColors || ALL_STICKER_COLORS).includes(colorName);
+                        const hex = STICKER_COLOR_SWATCHES[colorName] || '#f97316';
+                        return `
+                          <button
+                            type="button"
+                            data-pkg-idx="${idx}"
+                            data-toggle-color="${escapeHtml(colorName)}"
+                            class="admin-pkg-color-toggle inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                              enabled
+                                ? 'bg-zinc-800 border-orange-500 text-white'
+                                : 'bg-[#14161A] border-zinc-800/80 text-zinc-500 opacity-60 hover:opacity-100'
+                            }"
+                          >
+                            <span class="w-2.5 h-2.5 rounded-full border border-white/25 shrink-0" style="background-color: ${hex}"></span>
+                            <span>${escapeHtml(colorName)}</span>
+                          </button>
+                        `;
+                      }).join('')}
+                    </div>
                   </div>
 
                   <div>
@@ -1507,7 +1813,7 @@ function renderAdminPanelView() {
                         </span>
                       </div>
 
-                      <div class="flex items-center gap-2">
+                      <div class="flex items-center gap-2 flex-wrap">
                         <button
                           type="button"
                           data-preview-tag="${escapeHtml(s.tagId)}"
@@ -1522,6 +1828,35 @@ function renderAdminPanelView() {
                         >
                           Grabar en Tag NFC Físico
                         </button>
+                        ${
+                          state.adminConfirmDeleteTagId === s.tagId
+                            ? `
+                          <button
+                            type="button"
+                            data-confirm-delete-tag="${escapeHtml(s.tagId)}"
+                            ${state.adminDeletingTagId === s.tagId ? 'disabled' : ''}
+                            class="admin-confirm-delete-btn px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                          >
+                            ${state.adminDeletingTagId === s.tagId ? 'Borrando...' : 'Confirmar Borrado'}
+                          </button>
+                          <button
+                            type="button"
+                            data-cancel-delete-tag="${escapeHtml(s.tagId)}"
+                            class="admin-cancel-delete-btn px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                        `
+                            : `
+                          <button
+                            type="button"
+                            data-ask-delete-tag="${escapeHtml(s.tagId)}"
+                            class="admin-ask-delete-btn px-3 py-1.5 bg-red-950/70 hover:bg-red-900/80 border border-red-800/70 text-red-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                          >
+                            Borrar Registro
+                          </button>
+                        `
+                        }
                       </div>
                     </div>
 
@@ -1532,13 +1867,13 @@ function renderAdminPanelView() {
                       </div>
                       <div>
                         <span class="text-zinc-500 block">Contacto Principal (1):</span>
-                        <strong>${escapeHtml(s.emergencyContactName)}</strong> (<span class="font-mono tabular-nums">${escapeHtml(s.emergencyContactPhone)}</span>)
+                        <strong>${escapeHtml(s.emergencyContactName)}</strong>${s.emergencyContactRelation ? ` · ${escapeHtml(s.emergencyContactRelation)}` : ''} (<span class="font-mono tabular-nums">${escapeHtml(s.emergencyContactPhone)}</span>)
                       </div>
                       <div>
                         <span class="text-zinc-500 block">Segundo Contacto (2):</span>
                         ${
                           s.secondaryContactName || s.secondaryContactPhone
-                            ? `<strong>${escapeHtml(s.secondaryContactName || 'Contacto 2')}</strong> (<span class="font-mono tabular-nums">${escapeHtml(s.secondaryContactPhone || '-')}</span>)`
+                            ? `<strong>${escapeHtml(s.secondaryContactName || 'Contacto 2')}</strong>${s.secondaryContactRelation ? ` · ${escapeHtml(s.secondaryContactRelation)}` : ''} (<span class="font-mono tabular-nums">${escapeHtml(s.secondaryContactPhone || '-')}</span>)`
                             : '<span class="text-zinc-500">No registrado</span>'
                         }
                       </div>
@@ -1590,10 +1925,14 @@ function syncFormInputsBeforeReRender() {
   if (medicalConditionsEl) state.medicalConditions = medicalConditionsEl.value;
   const emergencyContactNameEl = document.getElementById('emergencyContactName');
   if (emergencyContactNameEl) state.emergencyContactName = emergencyContactNameEl.value;
+  const emergencyContactRelationEl = document.getElementById('emergencyContactRelation');
+  if (emergencyContactRelationEl) state.emergencyContactRelation = emergencyContactRelationEl.value;
   const emergencyContactPhoneEl = document.getElementById('emergencyContactPhone');
   if (emergencyContactPhoneEl) state.emergencyContactPhone = emergencyContactPhoneEl.value;
   const secondaryContactNameEl = document.getElementById('secondaryContactName');
   if (secondaryContactNameEl) state.secondaryContactName = secondaryContactNameEl.value;
+  const secondaryContactRelationEl = document.getElementById('secondaryContactRelation');
+  if (secondaryContactRelationEl) state.secondaryContactRelation = secondaryContactRelationEl.value;
   const secondaryContactPhoneEl = document.getElementById('secondaryContactPhone');
   if (secondaryContactPhoneEl) state.secondaryContactPhone = secondaryContactPhoneEl.value;
   const motorcycleDetailsEl = document.getElementById('motorcycleDetails');
@@ -1616,6 +1955,24 @@ function syncFormInputsBeforeReRender() {
   if (adminPassEl) state.adminPasswordInput = adminPassEl.value;
   const adminSearchEl = document.getElementById('admin-search-input');
   if (adminSearchEl) state.adminSearchQuery = adminSearchEl.value;
+
+  state.packages = state.packages.map((pkg, idx) => {
+    const nameEl = document.getElementById(`pkg-name-${idx}`);
+    const subEl = document.getElementById(`pkg-subtitle-${idx}`);
+    const priceEl = document.getElementById(`pkg-price-${idx}`);
+    const countEl = document.getElementById(`pkg-count-${idx}`);
+    const specsEl = document.getElementById(`pkg-specs-${idx}`);
+    return {
+      ...pkg,
+      name: nameEl ? nameEl.value : pkg.name,
+      subtitle: subEl ? subEl.value : pkg.subtitle,
+      price: priceEl ? Number(priceEl.value) || pkg.price : pkg.price,
+      stickerCount: countEl
+        ? Math.max(1, Math.min(10, Math.round(Number(countEl.value) || pkg.stickerCount || 1)))
+        : pkg.stickerCount || 1,
+      specs: specsEl ? specsEl.value : pkg.specs,
+    };
+  });
 }
 
 export function renderApp() {
@@ -1796,9 +2153,11 @@ function bindEvents() {
       state.bloodType = 'O+';
       state.allergies = 'Penicilina, Látex';
       state.medicalConditions = 'Asma controlada, Tomo salbutamol en inhalador';
-      state.emergencyContactName = 'María (Esposa)';
+      state.emergencyContactName = 'María González';
+      state.emergencyContactRelation = 'Esposa';
       state.emergencyContactPhone = '+52 55 1234 5678';
-      state.secondaryContactName = 'Carlos Rojas (Hermano)';
+      state.secondaryContactName = 'Carlos Rojas';
+      state.secondaryContactRelation = 'Hermano';
       state.secondaryContactPhone = '+52 55 8765 4321';
       state.motorcycleDetails = 'Yamaha MT-07 Gris · Casco AGV K6';
       state.insuranceDetails = 'GNP Seguros Póliza #MX-994120';
@@ -1851,8 +2210,10 @@ function bindEvents() {
         allergies: state.allergies,
         medicalConditions: state.medicalConditions,
         emergencyContactName: state.emergencyContactName,
+        emergencyContactRelation: state.emergencyContactRelation,
         emergencyContactPhone: state.emergencyContactPhone,
         secondaryContactName: state.secondaryContactName,
+        secondaryContactRelation: state.secondaryContactRelation,
         secondaryContactPhone: state.secondaryContactPhone,
         motorcycleDetails: state.motorcycleDetails,
         insuranceDetails: state.insuranceDetails,
@@ -1877,8 +2238,10 @@ function bindEvents() {
             allergies: validation.data.allergies,
             medicalConditions: validation.data.medicalConditions,
             emergencyContactName: validation.data.emergencyContactName,
+            emergencyContactRelation: validation.data.emergencyContactRelation,
             emergencyContactPhone: validation.data.emergencyContactPhone,
             secondaryContactName: validation.data.secondaryContactName,
+            secondaryContactRelation: validation.data.secondaryContactRelation,
             secondaryContactPhone: validation.data.secondaryContactPhone,
             motorcycleDetails: validation.data.motorcycleDetails,
             insuranceDetails: validation.data.insuranceDetails,
@@ -1970,6 +2333,21 @@ function bindEvents() {
     });
   });
 
+  const colorChoiceBtns = document.querySelectorAll('.sticker-color-choice-btn');
+  colorChoiceBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      const unitIdx = Number(btn.getAttribute('data-sticker-unit'));
+      const colorName = btn.getAttribute('data-sticker-color');
+      if (!Number.isNaN(unitIdx) && colorName && ALL_STICKER_COLORS.includes(colorName)) {
+        const nextColors = [...state.selectedStickerColors];
+        nextColors[unitIdx] = colorName;
+        state.selectedStickerColors = nextColors;
+        renderApp();
+      }
+    });
+  });
+
   const purchaseForm = document.getElementById('sticker-purchase-form');
   if (purchaseForm) {
     purchaseForm.addEventListener('submit', (e) => {
@@ -2001,6 +2379,41 @@ function bindEvents() {
     });
   }
 
+  async function verifyAuthorizedAdminGoogleAccount() {
+    let targetUser = state.user;
+    if (!isAuthorizedAdminUser(targetUser)) {
+      targetUser = await handleGoogleSignIn(true);
+    }
+    if (!targetUser) {
+      state.adminLoginError =
+        'Se requiere verificar tu identidad con Google para acceder al panel.';
+      renderApp();
+      return false;
+    }
+    if (!isAuthorizedAdminUser(targetUser)) {
+      state.adminAuthenticated = false;
+      state.adminLoginError = `Acceso denegado: El correo "${
+        targetUser.email || 'desconocido'
+      }" no está autorizado. Solo se permite verificar con ${AUTHORIZED_ADMIN_EMAIL}.`;
+      renderApp();
+      return false;
+    }
+    state.adminAuthenticated = true;
+    state.viewMode = 'admin_panel';
+    subscribeToAllStickersForAdmin();
+    renderApp();
+    return true;
+  }
+
+  const adminGoogleVerifyBtn = document.getElementById('admin-google-verify-btn');
+  if (adminGoogleVerifyBtn) {
+    adminGoogleVerifyBtn.addEventListener('click', async () => {
+      syncFormInputsBeforeReRender();
+      state.adminLoginError = null;
+      await verifyAuthorizedAdminGoogleAccount();
+    });
+  }
+
   const adminLoginForm = document.getElementById('admin-login-form');
   if (adminLoginForm) {
     adminLoginForm.addEventListener('submit', async (e) => {
@@ -2012,25 +2425,13 @@ function bindEvents() {
       const passClean = state.adminPasswordInput.trim();
 
       if (
-        (userClean === 'admin' || userClean === 'gami.rodrigo@gmail.com') &&
+        (userClean === 'admin' || userClean === AUTHORIZED_ADMIN_EMAIL) &&
         passClean === 'bikersafe2026'
       ) {
-        if (!state.user) {
-          const loggedUser = await handleGoogleSignIn();
-          if (!loggedUser) {
-            state.adminLoginError =
-              'Se requiere confirmar la sesión de Google autorizada para consultar la base de datos.';
-            renderApp();
-            return;
-          }
-        }
-        state.adminAuthenticated = true;
-        state.viewMode = 'admin_panel';
-        subscribeToAllStickersForAdmin();
-        renderApp();
+        await verifyAuthorizedAdminGoogleAccount();
       } else {
         state.adminLoginError =
-          'Usuario o contraseña incorrectos. Verifica tus credenciales de personal autorizado.';
+          'Credenciales incorrectas. Verifica tu correo autorizado y contraseña.';
         renderApp();
       }
     });
@@ -2140,30 +2541,112 @@ function bindEvents() {
     });
   });
 
+  const adminAskDeleteBtns = document.querySelectorAll('.admin-ask-delete-btn');
+  adminAskDeleteBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tagId = btn.getAttribute('data-ask-delete-tag');
+      state.adminConfirmDeleteTagId = tagId;
+      renderApp();
+    });
+  });
+
+  const adminCancelDeleteBtns = document.querySelectorAll('.admin-cancel-delete-btn');
+  adminCancelDeleteBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.adminConfirmDeleteTagId = null;
+      renderApp();
+    });
+  });
+
+  const adminConfirmDeleteBtns = document.querySelectorAll('.admin-confirm-delete-btn');
+  adminConfirmDeleteBtns.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const tagId = btn.getAttribute('data-confirm-delete-tag');
+      if (!tagId) return;
+      const found = state.adminAllStickers.find((s) => s.tagId === tagId);
+      state.adminDeletingTagId = tagId;
+      state.adminNfcMessage = null;
+      renderApp();
+
+      const docPath = `stickers/${tagId}`;
+      try {
+        await deleteDoc(doc(db, 'stickers', tagId));
+        state.adminAllStickers = state.adminAllStickers.filter((s) => s.tagId !== tagId);
+        if (state.userSticker && state.userSticker.tagId === tagId) {
+          state.userSticker = null;
+          state.currentTagId = null;
+        }
+        state.adminConfirmDeleteTagId = null;
+        state.adminNfcMessage = `Registro de ${found ? found.fullName : tagId} (${tagId}) eliminado correctamente.`;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, docPath);
+      } finally {
+        state.adminDeletingTagId = null;
+        renderApp();
+      }
+    });
+  });
+
+  const adminPkgColorToggles = document.querySelectorAll('.admin-pkg-color-toggle');
+  adminPkgColorToggles.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      const pkgIdx = Number(btn.getAttribute('data-pkg-idx'));
+      const colorName = btn.getAttribute('data-toggle-color');
+      if (Number.isNaN(pkgIdx) || !colorName || !state.packages[pkgIdx]) return;
+
+      const currentColors = Array.isArray(state.packages[pkgIdx].availableColors)
+        ? [...state.packages[pkgIdx].availableColors]
+        : [...ALL_STICKER_COLORS];
+
+      let nextColors;
+      if (currentColors.includes(colorName)) {
+        if (currentColors.length <= 1) return; // Require at least 1 selectable color
+        nextColors = currentColors.filter((c) => c !== colorName);
+      } else {
+        nextColors = ALL_STICKER_COLORS.filter(
+          (c) => currentColors.includes(c) || c === colorName
+        );
+      }
+
+      state.packages[pkgIdx] = {
+        ...state.packages[pkgIdx],
+        availableColors: nextColors,
+      };
+      renderApp();
+    });
+  });
+
   const adminPackagesForm = document.getElementById('admin-packages-form');
   if (adminPackagesForm) {
     adminPackagesForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      syncFormInputsBeforeReRender();
       state.adminPackagesSavedSuccess = false;
       state.adminPackagesError = null;
 
       const updatedPackages = state.packages.map((pkg, idx) => {
-        const nameEl = document.getElementById(`pkg-name-${idx}`);
-        const subEl = document.getElementById(`pkg-subtitle-${idx}`);
-        const priceEl = document.getElementById(`pkg-price-${idx}`);
-        const specsEl = document.getElementById(`pkg-specs-${idx}`);
-
-        const name = String(nameEl ? nameEl.value : pkg.name).trim().slice(0, 80);
-        const subtitle = String(subEl ? subEl.value : pkg.subtitle).trim().slice(0, 80);
-        const priceNum = Math.max(1, Math.min(100000, Number(priceEl ? priceEl.value : pkg.price) || pkg.price));
-        const specs = String(specsEl ? specsEl.value : pkg.specs).trim().slice(0, 250);
+        const name = String(pkg.name || '').trim().slice(0, 80);
+        const subtitle = String(pkg.subtitle || '').trim().slice(0, 80);
+        const priceNum = Math.max(1, Math.min(100000, Number(pkg.price) || 249));
+        const stickerCount = Math.max(
+          1,
+          Math.min(10, Math.round(Number(pkg.stickerCount) || 1))
+        );
+        const specs = String(pkg.specs || '').trim().slice(0, 250);
+        const availableColors =
+          Array.isArray(pkg.availableColors) && pkg.availableColors.length > 0
+            ? pkg.availableColors.filter((c) => ALL_STICKER_COLORS.includes(c))
+            : [...ALL_STICKER_COLORS];
 
         return {
           pkgId: pkg.pkgId,
-          name: name.length >= 2 ? name : pkg.name,
-          subtitle: subtitle.length >= 1 ? subtitle : pkg.subtitle,
+          name: name.length >= 2 ? name : DEFAULT_STICKER_PACKAGES[idx].name,
+          subtitle: subtitle.length >= 1 ? subtitle : DEFAULT_STICKER_PACKAGES[idx].subtitle,
           price: priceNum,
-          specs: specs.length >= 2 ? specs : pkg.specs,
+          specs: specs.length >= 2 ? specs : DEFAULT_STICKER_PACKAGES[idx].specs,
+          stickerCount,
+          availableColors,
           sortOrder: idx + 1,
         };
       });
@@ -2225,7 +2708,12 @@ function initBikerSafeApp() {
       }
     } else {
       subscribeToUserSticker(currentUser);
-      if (state.adminAuthenticated) {
+      if (!isAuthorizedAdminUser(currentUser)) {
+        state.adminAuthenticated = false;
+        if (state.viewMode === 'admin_panel') {
+          state.viewMode = 'admin_login';
+        }
+      } else if (state.adminAuthenticated) {
         subscribeToAllStickersForAdmin();
       }
     }

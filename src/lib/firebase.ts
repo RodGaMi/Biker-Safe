@@ -121,8 +121,10 @@ export const SCHEMA_CONSTRAINTS = {
   allergies: { minLength: 0, maxLength: 500 },
   medicalConditions: { minLength: 0, maxLength: 1000 },
   emergencyContactName: { minLength: 2, maxLength: 100 },
+  emergencyContactRelation: { minLength: 1, maxLength: 50 },
   emergencyContactPhone: { minLength: 5, maxLength: 30 },
   secondaryContactName: { minLength: 0, maxLength: 100 },
+  secondaryContactRelation: { minLength: 0, maxLength: 50 },
   secondaryContactPhone: { minLength: 0, maxLength: 30 },
   motorcycleDetails: { minLength: 0, maxLength: 150 },
   insuranceDetails: { minLength: 0, maxLength: 150 },
@@ -139,8 +141,10 @@ export interface EmergencyStickerRecord {
   allergies: string;
   medicalConditions: string;
   emergencyContactName: string;
+  emergencyContactRelation: string;
   emergencyContactPhone: string;
   secondaryContactName: string;
+  secondaryContactRelation: string;
   secondaryContactPhone: string;
   motorcycleDetails: string;
   insuranceDetails: string;
@@ -168,9 +172,37 @@ export interface StickerPackageOption {
   subtitle: string;
   price: number;
   specs: string;
+  stickerCount: number;
+  availableColors: string[];
   sortOrder: number;
   updatedAt?: Timestamp | null;
 }
+
+export const AUTHORIZED_ADMIN_EMAIL = 'gami.rodrigo@gmail.com';
+
+export const ALL_STICKER_COLORS = [
+  'Rojo',
+  'Negro',
+  'Gris',
+  'Verde',
+  'Azul',
+  'Rosa',
+  'Morado',
+  'Amarillo',
+] as const;
+
+export type StickerColorName = (typeof ALL_STICKER_COLORS)[number];
+
+export const STICKER_COLOR_SWATCHES: Record<string, string> = {
+  Rojo: '#EF4444',
+  Negro: '#18181B',
+  Gris: '#71717A',
+  Verde: '#22C55E',
+  Azul: '#3B82F6',
+  Rosa: '#EC4899',
+  Morado: '#A855F7',
+  Amarillo: '#EAB308',
+};
 
 export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
   {
@@ -178,15 +210,19 @@ export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
     name: 'Kit Individual Casco NFC',
     subtitle: 'Para 1 casco principal',
     price: 249,
-    specs: '1 Sticker NFC NTAG213 · Acabado Carbono + Naranja · Resina 3M IP68',
+    specs: '1 Sticker NFC NTAG213 · Acabado Resina 3M IP68',
+    stickerCount: 1,
+    availableColors: [...ALL_STICKER_COLORS],
     sortOrder: 1,
   },
   {
     pkgId: 'pro',
     name: 'Kit Biker Safe Pro',
-    subtitle: 'Más elegido · Casco + Moto',
+    subtitle: 'Más elegido · 2 Stickers NFC',
     price: 399,
-    specs: '2 Stickers NFC para Casco + 1 Sticker NFC Reflejante para Chasis',
+    specs: '2 Stickers NFC para Casco / Moto · Color elegible por unidad',
+    stickerCount: 2,
+    availableColors: [...ALL_STICKER_COLORS],
     sortOrder: 2,
   },
   {
@@ -194,10 +230,47 @@ export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
     name: 'Kit Dúo / Rodada',
     subtitle: 'Cobertura en múltiples cascos',
     price: 649,
-    specs: '4 Stickers NFC NTAG215 Programados con tu URL única de emergencia',
+    specs: '4 Stickers NFC NTAG215 Programados con tu perfil médico',
+    stickerCount: 4,
+    availableColors: [...ALL_STICKER_COLORS],
     sortOrder: 3,
   },
 ];
+
+export function normalizePackageOption(
+  raw: Partial<StickerPackageOption>,
+  fallbackIndex = 0
+): StickerPackageOption {
+  const fallback =
+    DEFAULT_STICKER_PACKAGES.find((p) => p.pkgId === raw.pkgId) ||
+    DEFAULT_STICKER_PACKAGES[fallbackIndex] ||
+    DEFAULT_STICKER_PACKAGES[0];
+
+  const validColors = Array.isArray(raw.availableColors)
+    ? raw.availableColors.filter((c) =>
+        (ALL_STICKER_COLORS as readonly string[]).includes(c)
+      )
+    : [];
+
+  return {
+    pkgId: raw.pkgId || fallback.pkgId,
+    name: raw.name || fallback.name,
+    subtitle: raw.subtitle || fallback.subtitle,
+    price: typeof raw.price === 'number' && raw.price >= 1 ? raw.price : fallback.price,
+    specs: raw.specs || fallback.specs,
+    stickerCount:
+      typeof raw.stickerCount === 'number' &&
+      raw.stickerCount >= 1 &&
+      raw.stickerCount <= 10
+        ? Math.round(raw.stickerCount)
+        : fallback.stickerCount,
+    availableColors:
+      validColors.length > 0 ? validColors : [...ALL_STICKER_COLORS],
+    sortOrder:
+      typeof raw.sortOrder === 'number' ? raw.sortOrder : fallback.sortOrder,
+    updatedAt: raw.updatedAt,
+  };
+}
 
 export function generateUniqueTagId(): string {
   const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
@@ -229,8 +302,10 @@ export function sanitizeAndValidateStickerInput(input: {
   allergies: string;
   medicalConditions: string;
   emergencyContactName: string;
+  emergencyContactRelation: string;
   emergencyContactPhone: string;
   secondaryContactName: string;
+  secondaryContactRelation: string;
   secondaryContactPhone: string;
   motorcycleDetails: string;
   insuranceDetails: string;
@@ -281,6 +356,16 @@ export function sanitizeAndValidateStickerInput(input: {
     };
   }
 
+  const emergencyContactRelation = input.emergencyContactRelation
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.emergencyContactRelation.maxLength);
+  if (emergencyContactRelation.length < SCHEMA_CONSTRAINTS.emergencyContactRelation.minLength) {
+    return {
+      valid: false,
+      error: 'Por favor ingresa el parentesco del contacto de emergencia principal.',
+    };
+  }
+
   const emergencyContactPhone = input.emergencyContactPhone
     .trim()
     .slice(0, SCHEMA_CONSTRAINTS.emergencyContactPhone.maxLength);
@@ -298,6 +383,10 @@ export function sanitizeAndValidateStickerInput(input: {
   const secondaryContactName = input.secondaryContactName
     .trim()
     .slice(0, SCHEMA_CONSTRAINTS.secondaryContactName.maxLength);
+
+  const secondaryContactRelation = input.secondaryContactRelation
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.secondaryContactRelation.maxLength);
 
   const secondaryContactPhone = input.secondaryContactPhone
     .trim()
@@ -335,8 +424,10 @@ export function sanitizeAndValidateStickerInput(input: {
       allergies,
       medicalConditions,
       emergencyContactName,
+      emergencyContactRelation,
       emergencyContactPhone,
       secondaryContactName,
+      secondaryContactRelation,
       secondaryContactPhone,
       motorcycleDetails,
       insuranceDetails,
@@ -356,8 +447,10 @@ export function buildUniqueStickerUrl(sticker: Omit<EmergencyStickerRecord, 'cre
     a: sticker.allergies,
     m: sticker.medicalConditions,
     cn: sticker.emergencyContactName,
+    cr: sticker.emergencyContactRelation || '',
     cp: sticker.emergencyContactPhone,
     scn: sticker.secondaryContactName || '',
+    scr: sticker.secondaryContactRelation || '',
     scp: sticker.secondaryContactPhone || '',
     mc: sticker.motorcycleDetails,
     ins: sticker.insuranceDetails,
@@ -380,8 +473,10 @@ export function parseEncodedStickerPacket(encoded: string | null): Partial<Emerg
       allergies: typeof parsed.a === 'string' ? parsed.a : '',
       medicalConditions: typeof parsed.m === 'string' ? parsed.m : '',
       emergencyContactName: typeof parsed.cn === 'string' ? parsed.cn : '',
+      emergencyContactRelation: typeof parsed.cr === 'string' ? parsed.cr : '',
       emergencyContactPhone: typeof parsed.cp === 'string' ? parsed.cp : '',
       secondaryContactName: typeof parsed.scn === 'string' ? parsed.scn : '',
+      secondaryContactRelation: typeof parsed.scr === 'string' ? parsed.scr : '',
       secondaryContactPhone: typeof parsed.scp === 'string' ? parsed.scp : '',
       motorcycleDetails: typeof parsed.mc === 'string' ? parsed.mc : '',
       insuranceDetails: typeof parsed.ins === 'string' ? parsed.ins : '',
@@ -416,6 +511,14 @@ export async function syncUserPrivateProfile(user: User): Promise<void> {
 
 export async function signInWithGoogle(): Promise<User> {
   const result = await signInWithPopup(auth, googleProvider);
+  await syncUserPrivateProfile(result.user);
+  return result.user;
+}
+
+export async function signInAdminWithGoogle(): Promise<User> {
+  const adminProvider = new GoogleAuthProvider();
+  adminProvider.setCustomParameters({ prompt: 'select_account' });
+  const result = await signInWithPopup(auth, adminProvider);
   await syncUserPrivateProfile(result.user);
   return result.user;
 }

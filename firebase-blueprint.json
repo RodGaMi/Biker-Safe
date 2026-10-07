@@ -339,6 +339,227 @@
         "sortOrder",
         "updatedAt"
       ]
+    },
+    "StickerOrder": {
+      "title": "StickerOrder",
+      "description": "Customer purchase order for customized NFC emergency stickers with shipping details and SPEI/WhatsApp payment tracking.",
+      "type": "object",
+      "properties": {
+        "orderId": {
+          "type": "string",
+          "description": "Unique order identifier (folio).",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tagId": {
+          "type": "string",
+          "description": "Linked NFC sticker tagId.",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the customer who placed the order.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "riderName": {
+          "type": "string",
+          "description": "Full name on the emergency medical profile.",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "pkgId": {
+          "type": "string",
+          "description": "Selected package ID.",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "pkgName": {
+          "type": "string",
+          "description": "Selected package display name.",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "stickerCount": {
+          "type": "number",
+          "description": "Number of stickers included in the order (1 to 10)."
+        },
+        "selectedColors": {
+          "type": "array",
+          "description": "Chosen color for each individual sticker in the package."
+        },
+        "totalPrice": {
+          "type": "number",
+          "description": "Total order amount in MXN."
+        },
+        "paymentMethod": {
+          "type": "string",
+          "description": "Selected payment method.",
+          "enum": [
+            "SPEI_WHATSAPP"
+          ],
+          "minLength": 4,
+          "maxLength": 30
+        },
+        "status": {
+          "type": "string",
+          "description": "Order fulfillment status.",
+          "enum": [
+            "pendiente_pago",
+            "pagado",
+            "tag_programado",
+            "enviado"
+          ],
+          "minLength": 4,
+          "maxLength": 30
+        },
+        "recipientName": {
+          "type": "string",
+          "description": "Full name of shipping recipient.",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "recipientPhone": {
+          "type": "string",
+          "description": "Contact phone or WhatsApp number for delivery.",
+          "minLength": 5,
+          "maxLength": 30,
+          "pattern": "^[0-9+\\-()\\s]+$"
+        },
+        "shippingStreet": {
+          "type": "string",
+          "description": "Street name, exterior and interior number.",
+          "minLength": 3,
+          "maxLength": 200
+        },
+        "shippingColony": {
+          "type": "string",
+          "description": "Neighborhood or colony (Colonia).",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "shippingCityState": {
+          "type": "string",
+          "description": "City, municipality, and state.",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "shippingPostalCode": {
+          "type": "string",
+          "description": "Postal code (Código Postal).",
+          "minLength": 3,
+          "maxLength": 15
+        },
+        "shippingNotes": {
+          "type": "string",
+          "description": "Optional delivery references or notes.",
+          "minLength": 0,
+          "maxLength": 250
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when order was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when order was last updated."
+        }
+      },
+      "required": [
+        "orderId",
+        "tagId",
+        "ownerId",
+        "riderName",
+        "pkgId",
+        "pkgName",
+        "stickerCount",
+        "selectedColors",
+        "totalPrice",
+        "paymentMethod",
+        "status",
+        "recipientName",
+        "recipientPhone",
+        "shippingStreet",
+        "shippingColony",
+        "shippingCityState",
+        "shippingPostalCode",
+        "shippingNotes",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PaymentSettings": {
+      "title": "PaymentSettings",
+      "description": "SPEI bank transfer and WhatsApp checkout settings managed by authorized administrators.",
+      "type": "object",
+      "properties": {
+        "settingId": {
+          "type": "string",
+          "description": "Configuration identifier (spei).",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bankName": {
+          "type": "string",
+          "description": "Receiving bank name for SPEI transfers.",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "beneficiaryName": {
+          "type": "string",
+          "description": "Account holder / beneficiary name.",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "clabe": {
+          "type": "string",
+          "description": "18-digit CLABE interbancaria or account identifier.",
+          "minLength": 10,
+          "maxLength": 24
+        },
+        "accountOrCard": {
+          "type": "string",
+          "description": "Optional card or account number for deposits.",
+          "minLength": 0,
+          "maxLength": 30
+        },
+        "whatsappNumber": {
+          "type": "string",
+          "description": "WhatsApp phone number (with country code) to receive order confirmations and payment receipts.",
+          "minLength": 8,
+          "maxLength": 25,
+          "pattern": "^[0-9+\\-()\\s]+$"
+        },
+        "paymentInstructions": {
+          "type": "string",
+          "description": "Instructions shown to the customer when completing payment via SPEI and WhatsApp.",
+          "minLength": 0,
+          "maxLength": 350
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update."
+        }
+      },
+      "required": [
+        "settingId",
+        "bankName",
+        "beneficiaryName",
+        "clabe",
+        "accountOrCard",
+        "whatsappNumber",
+        "paymentInstructions",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -365,6 +586,18 @@
         "$ref": "#/entities/StickerPackageOption"
       },
       "description": "Purchase package options editable from the internal administration panel."
+    },
+    "/orders/{orderId}": {
+      "schema": {
+        "$ref": "#/entities/StickerOrder"
+      },
+      "description": "Customer sticker orders with per-sticker colors, shipping address, and SPEI/WhatsApp payment status."
+    },
+    "/payment_settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/PaymentSettings"
+      },
+      "description": "SPEI transfer and WhatsApp configuration for customer checkout."
     }
   }
 }

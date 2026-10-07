@@ -135,6 +135,72 @@ const STICKER_COLOR_SWATCHES = {
   Amarillo: '#EAB308',
 };
 
+const ORDER_STATUSES = [
+  'pendiente_pago',
+  'pagado',
+  'tag_programado',
+  'enviado',
+];
+
+const ORDER_STATUS_LABELS = {
+  pendiente_pago: 'Pendiente de Pago',
+  pagado: 'Pagado',
+  tag_programado: 'Tag Programado',
+  enviado: 'Enviado',
+};
+
+const DEFAULT_PAYMENT_SETTINGS = {
+  settingId: 'spei',
+  bankName: 'BBVA México / Transferencia SPEI',
+  beneficiaryName: 'Biker Safe México',
+  clabe: '012180001234567890',
+  accountOrCard: '4152 3138 0000 0000',
+  whatsappNumber: '5215512345678',
+  paymentInstructions:
+    'Realiza tu transferencia SPEI por el monto exacto indicando tu Folio de Pedido en el concepto y envía tu comprobante por WhatsApp para programar y despachar tus stickers NFC.',
+};
+
+function generateUniqueOrderId() {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let token = 'ord-';
+  const randomValues = new Uint32Array(6);
+  window.crypto.getRandomValues(randomValues);
+  for (let i = 0; i < 6; i++) {
+    token += chars[randomValues[i] % chars.length];
+  }
+  return token;
+}
+
+function buildWhatsAppOrderUrl(order, settings) {
+  const cleanPhone = String(settings?.whatsappNumber || '').replace(/[^0-9]/g, '');
+  const colorsBreakdown = (order.selectedColors || [])
+    .map((c, i) => `Sticker #${i + 1}: ${c}`)
+    .join(', ');
+
+  const messageLines = [
+    `Hola *Biker Safe*, acabo de registrar mi pedido de Stickers NFC y adjunto mis datos para confirmar el pago por transferencia SPEI:`,
+    ``,
+    `*Folio de Pedido:* ${String(order.orderId || '').toUpperCase()}`,
+    `*ID Tag NFC:* ${order.tagId}`,
+    `*Perfil Biker:* ${order.riderName}`,
+    `*Paquete:* ${order.pkgName} (${order.stickerCount} ${order.stickerCount === 1 ? 'sticker' : 'stickers'})`,
+    `*Colores elegidos:* ${colorsBreakdown}`,
+    `*Total a transferir:* $${order.totalPrice} MXN`,
+    ``,
+    `*Datos de Envío:*`,
+    `Recibe: ${order.recipientName} (${order.recipientPhone})`,
+    `Dirección: ${order.shippingStreet}, Col. ${order.shippingColony}, C.P. ${order.shippingPostalCode}, ${order.shippingCityState}`,
+    order.shippingNotes ? `Referencias: ${order.shippingNotes}` : '',
+    ``,
+    `Enseguida envío mi comprobante de pago SPEI.`,
+  ].filter(Boolean);
+
+  const encodedText = encodeURIComponent(messageLines.join('\n'));
+  return cleanPhone
+    ? `https://wa.me/${cleanPhone}?text=${encodedText}`
+    : `https://wa.me/?text=${encodedText}`;
+}
+
 const DEFAULT_STICKER_PACKAGES = [
   {
     pkgId: 'single',
@@ -454,14 +520,24 @@ const state = {
   })),
   packagesLoadedFromDb: false,
 
+  // Dynamic SPEI + WhatsApp Payment Settings (Editable by Admin)
+  paymentSettings: { ...DEFAULT_PAYMENT_SETTINGS },
+
   // Checkout state
   selectedPkgId: 'pro',
   selectedStickerColors: ['Rojo', 'Negro', 'Gris', 'Verde', 'Azul', 'Rosa', 'Morado', 'Amarillo', 'Rojo', 'Negro'],
-  shippingAddress: '',
-  shippingCity: '',
-  shippingZip: '',
-  orderCompleted: false,
-  orderFolio: '',
+  recipientName: '',
+  recipientPhone: '',
+  shippingStreet: '',
+  shippingColony: '',
+  shippingCityState: '',
+  shippingPostalCode: '',
+  shippingNotes: '',
+  checkoutSubmitting: false,
+  checkoutError: null,
+  activeOrder: null,
+  userOrders: [],
+  copiedClabe: false,
 
   // Firestore records for current user & public landing
   userSticker: null,
@@ -475,21 +551,32 @@ const state = {
   adminUsernameInput: '',
   adminPasswordInput: '',
   adminLoginError: null,
-  adminTab: 'records', // 'records' | 'packages'
+  adminTab: 'orders', // 'orders' | 'records' | 'packages'
   adminAllStickers: [],
+  adminAllOrders: [],
   adminSearchQuery: '',
+  adminOrderSearchQuery: '',
   adminCopiedTagId: null,
   adminConfirmDeleteTagId: null,
   adminDeletingTagId: null,
+  adminConfirmDeleteOrderId: null,
+  adminDeletingOrderId: null,
+  adminUpdatingOrderId: null,
   adminNfcMessage: null,
   adminSavingPackages: false,
   adminPackagesSavedSuccess: false,
   adminPackagesError: null,
+  adminSavingPayment: false,
+  adminPaymentSavedSuccess: false,
+  adminPaymentError: null,
 };
 
 let unsubscribeUserStickers = null;
+let unsubscribeUserOrders = null;
 let unsubscribeAllStickersAdmin = null;
+let unsubscribeAllOrdersAdmin = null;
 let unsubscribePackages = null;
+let unsubscribePaymentSettings = null;
 
 async function syncUserPrivateProfile(user) {
   if (!user || !user.emailVerified) return;
@@ -565,6 +652,14 @@ async function handleSignOut() {
     unsubscribeAllStickersAdmin();
     unsubscribeAllStickersAdmin = null;
   }
+  if (unsubscribeAllOrdersAdmin) {
+    unsubscribeAllOrdersAdmin();
+    unsubscribeAllOrdersAdmin = null;
+  }
+  if (unsubscribeUserOrders) {
+    unsubscribeUserOrders();
+    unsubscribeUserOrders = null;
+  }
   await firebaseSignOut(auth);
 }
 
@@ -594,13 +689,82 @@ function subscribeToPackages() {
   );
 }
 
-// Subscribe to ALL stickers for the Internal Admin Panel
+function subscribeToPaymentSettings() {
+  if (unsubscribePaymentSettings) return;
+  unsubscribePaymentSettings = onSnapshot(
+    doc(db, 'payment_settings', 'spei'),
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        state.paymentSettings = {
+          settingId: 'spei',
+          bankName: data.bankName || DEFAULT_PAYMENT_SETTINGS.bankName,
+          beneficiaryName: data.beneficiaryName || DEFAULT_PAYMENT_SETTINGS.beneficiaryName,
+          clabe: data.clabe || DEFAULT_PAYMENT_SETTINGS.clabe,
+          accountOrCard: data.accountOrCard || '',
+          whatsappNumber: data.whatsappNumber || DEFAULT_PAYMENT_SETTINGS.whatsappNumber,
+          paymentInstructions:
+            data.paymentInstructions !== undefined
+              ? data.paymentInstructions
+              : DEFAULT_PAYMENT_SETTINGS.paymentInstructions,
+        };
+        renderApp();
+      }
+    },
+    () => {
+      // Fallback to default payment settings
+    }
+  );
+}
+
+function subscribeToUserOrders(user) {
+  if (unsubscribeUserOrders) {
+    unsubscribeUserOrders();
+    unsubscribeUserOrders = null;
+  }
+  if (!user) return;
+  const userOrdersQuery = query(
+    collection(db, 'orders'),
+    where('ownerId', '==', user.uid)
+  );
+  unsubscribeUserOrders = onSnapshot(
+    userOrdersQuery,
+    (snapshot) => {
+      const list = [];
+      snapshot.forEach((docSnap) => {
+        list.push(docSnap.data());
+      });
+      list.sort((a, b) => {
+        const ta = a.createdAt?.seconds || 0;
+        const tb = b.createdAt?.seconds || 0;
+        return tb - ta;
+      });
+      state.userOrders = list;
+      if (state.activeOrder) {
+        const updatedActive = list.find((o) => o.orderId === state.activeOrder.orderId);
+        if (updatedActive) {
+          state.activeOrder = updatedActive;
+        }
+      }
+      renderApp();
+    },
+    () => {
+      // Ignore if empty
+    }
+  );
+}
+
+// Subscribe to ALL stickers and ALL orders for the Internal Admin Panel
 function subscribeToAllStickersForAdmin() {
   if (unsubscribeAllStickersAdmin) {
     unsubscribeAllStickersAdmin();
     unsubscribeAllStickersAdmin = null;
   }
-  if (!state.user) return;
+  if (unsubscribeAllOrdersAdmin) {
+    unsubscribeAllOrdersAdmin();
+    unsubscribeAllOrdersAdmin = null;
+  }
+  if (!state.user || !isAuthorizedAdminUser(state.user)) return;
 
   const allStickersQuery = query(collection(db, 'stickers'), where('isActive', '==', true));
   unsubscribeAllStickersAdmin = onSnapshot(
@@ -622,6 +786,27 @@ function subscribeToAllStickersForAdmin() {
     },
     (error) => {
       handleFirestoreError(error, OperationType.LIST, 'stickers');
+    }
+  );
+
+  const allOrdersQuery = query(collection(db, 'orders'));
+  unsubscribeAllOrdersAdmin = onSnapshot(
+    allOrdersQuery,
+    (snapshot) => {
+      const orders = [];
+      snapshot.forEach((docSnap) => {
+        orders.push(docSnap.data());
+      });
+      orders.sort((a, b) => {
+        const ta = a.createdAt?.seconds || 0;
+        const tb = b.createdAt?.seconds || 0;
+        return tb - ta;
+      });
+      state.adminAllOrders = orders;
+      renderApp();
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'orders');
     }
   );
 }
@@ -1078,37 +1263,134 @@ function renderStickerCheckoutStep() {
           </div>
         </div>
 
-        <!-- Right: Package Selector & Checkout Form (7 cols) -->
+        <!-- Right: Package Selector, Shipping Form & Option B SPEI + WhatsApp Checkout (7 cols) -->
         <div class="lg:col-span-7 space-y-6">
           ${
-            state.orderCompleted
-              ? `
-            <div class="bg-[#0B0C0E] border border-orange-500/60 rounded-2xl p-6 sm:p-8 space-y-5">
-              <div>
-                <div class="text-xs font-mono text-orange-400">ORDEN CONFIRMADA · FOLIO ${escapeHtml(state.orderFolio)}</div>
-                <h3 class="text-xl font-bold text-white mt-1">¡Tu Sticker NFC Personalizado está en producción!</h3>
+            state.activeOrder
+              ? (() => {
+                  const ord = state.activeOrder;
+                  const waUrl = buildWhatsAppOrderUrl(ord, state.paymentSettings);
+                  const statusLabel = ORDER_STATUS_LABELS[ord.status] || 'Pendiente de Pago';
+                  return `
+            <div class="bg-[#0B0C0E] border-2 border-orange-500 rounded-2xl p-6 sm:p-8 space-y-6">
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+                <div>
+                  <div class="flex items-center gap-2 text-xs font-mono text-orange-400">
+                    <span>PEDIDO REGISTRADO · FOLIO #${escapeHtml(ord.orderId.toUpperCase())}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>${escapeHtml(statusLabel)}</span>
+                  </div>
+                  <h3 class="text-xl font-bold text-white mt-1">
+                    Paso Final: Pago por Transferencia SPEI y Confirmación por WhatsApp
+                  </h3>
+                </div>
+                <div class="text-left sm:text-right shrink-0">
+                  <span class="block text-[10px] text-zinc-400 uppercase">Total a Transferir</span>
+                  <span class="text-2xl font-bold font-mono tabular-nums text-orange-500">$${ord.totalPrice} MXN</span>
+                </div>
               </div>
 
-              <p class="text-sm text-zinc-300 leading-relaxed">
-                Hemos recibido tu pedido de <strong>${escapeHtml(selectedPkg.name)}</strong> vinculado al registro médico de <strong>${escapeHtml(sticker.fullName)}</strong>. Nuestro personal autorizado configurará tu tag NFC y lo enviará a tu domicilio.
+              <p class="text-xs text-zinc-300 leading-relaxed">
+                ${escapeHtml(state.paymentSettings.paymentInstructions)}
               </p>
 
-              <div class="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1.5 text-xs text-zinc-300">
-                <div><strong class="text-white">Paquete:</strong> ${escapeHtml(selectedPkg.name)} (${selectedPkg.stickerCount} ${selectedPkg.stickerCount === 1 ? 'sticker' : 'stickers'} · $${selectedPkg.price} MXN)</div>
-                <div><strong class="text-white">Colores por Sticker:</strong> ${chosenColors.map((c, i) => `Sticker #${i + 1}: ${escapeHtml(c)}`).join(' · ')}</div>
-                <div><strong class="text-white">Titular del Perfil:</strong> ${escapeHtml(sticker.fullName)} (${escapeHtml(sticker.bloodType)})</div>
-                <div><strong class="text-white">Dirección de envío:</strong> ${escapeHtml(state.shippingAddress)}, ${escapeHtml(state.shippingCity)} C.P. ${escapeHtml(state.shippingZip)}</div>
+              <!-- SPEI Bank Details Card -->
+              <div class="bg-[#14161A] border border-zinc-800 rounded-xl p-5 space-y-4">
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+                  <span class="text-xs font-bold text-orange-400">
+                    DATOS BANCARIOS PARA TRANSFERENCIA SPEI / DEPÓSITO
+                  </span>
+                  <span class="text-[11px] text-zinc-400">0% Comisión</span>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <span class="text-zinc-500 block">Banco Receptor:</span>
+                    <strong class="text-white text-sm">${escapeHtml(state.paymentSettings.bankName)}</strong>
+                  </div>
+                  <div>
+                    <span class="text-zinc-500 block">Beneficiario:</span>
+                    <strong class="text-white text-sm">${escapeHtml(state.paymentSettings.beneficiaryName)}</strong>
+                  </div>
+                </div>
+
+                <div class="p-3.5 bg-[#0B0C0E] border border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <span class="text-[11px] text-zinc-400 block">CLABE Interbancaria:</span>
+                    <span class="text-base font-bold font-mono tabular-nums text-orange-400 tracking-wider select-all">${escapeHtml(state.paymentSettings.clabe)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    id="copy-clabe-btn"
+                    class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shrink-0"
+                  >
+                    ${state.copiedClabe ? '¡CLABE Copiada!' : 'Copiar CLABE'}
+                  </button>
+                </div>
+
+                ${
+                  state.paymentSettings.accountOrCard
+                    ? `
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-1">
+                    <div>
+                      <span class="text-zinc-500 block">Número de Cuenta / Tarjeta:</span>
+                      <strong class="text-zinc-200 font-mono tabular-nums">${escapeHtml(state.paymentSettings.accountOrCard)}</strong>
+                    </div>
+                    <div>
+                      <span class="text-zinc-500 block">Concepto o Referencia de Pago:</span>
+                      <strong class="text-orange-400 font-mono tabular-nums">FOLIO ${escapeHtml(ord.orderId.toUpperCase())}</strong>
+                    </div>
+                  </div>
+                `
+                    : `
+                  <div class="text-xs">
+                    <span class="text-zinc-500">Concepto o Referencia de Pago: </span>
+                    <strong class="text-orange-400 font-mono tabular-nums">FOLIO ${escapeHtml(ord.orderId.toUpperCase())}</strong>
+                  </div>
+                `
+                }
               </div>
 
-              <div class="flex flex-wrap items-center gap-3 pt-2">
-                <button type="button" id="new-order-btn" class="px-5 py-3 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-xl transition-colors cursor-pointer">
-                  Realizar otro pedido
-                </button>
+              <!-- Order Summary Box -->
+              <div class="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1.5 text-xs text-zinc-300">
+                <div><strong class="text-white">Paquete:</strong> ${escapeHtml(ord.pkgName)} (${ord.stickerCount} ${ord.stickerCount === 1 ? 'sticker' : 'stickers'} · $${ord.totalPrice} MXN)</div>
+                <div><strong class="text-white">Colores por Sticker:</strong> ${(ord.selectedColors || []).map((c, i) => `Sticker #${i + 1}: ${escapeHtml(c)}`).join(' · ')}</div>
+                <div><strong class="text-white">Recibe:</strong> ${escapeHtml(ord.recipientName)} · Tel: <span class="font-mono tabular-nums">${escapeHtml(ord.recipientPhone)}</span></div>
+                <div><strong class="text-white">Dirección de Envío:</strong> ${escapeHtml(ord.shippingStreet)}, Col. ${escapeHtml(ord.shippingColony)}, C.P. ${escapeHtml(ord.shippingPostalCode)}, ${escapeHtml(ord.shippingCityState)}${ord.shippingNotes ? ` (${escapeHtml(ord.shippingNotes)})` : ''}</div>
+              </div>
+
+              <!-- Primary Action: Send Order & Receipt via WhatsApp -->
+              <div class="space-y-3 pt-1">
+                <a
+                  href="${escapeHtml(waUrl)}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="w-full py-4 px-6 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors text-center"
+                >
+                  <span>Enviar Pedido y Comprobante de Pago por WhatsApp</span>
+                </a>
+
+                <div class="flex items-center justify-between pt-2">
+                  <button type="button" id="new-order-btn" class="text-xs font-semibold text-zinc-400 hover:text-white underline cursor-pointer">
+                    ← Realizar otro pedido o cambiar paquete
+                  </button>
+                </div>
               </div>
             </div>
-          `
+          `;
+                })()
               : `
             <form id="sticker-purchase-form" class="space-y-6">
+              ${
+                state.checkoutError
+                  ? `
+                <div class="p-4 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+                  ${escapeHtml(state.checkoutError)}
+                </div>
+              `
+                  : ''
+              }
+
               <div>
                 <label class="block text-xs font-bold text-zinc-300 mb-3">
                   1. Selecciona tu Opción de Compra de Tag NFC
@@ -1197,33 +1479,117 @@ function renderStickerCheckoutStep() {
                 </div>
               </div>
 
+              <!-- Step 3: Shipping Information Form -->
               <div class="space-y-4 pt-2 border-t border-zinc-800">
-                <div class="text-xs font-bold text-zinc-300">
-                  3. Datos de Envío para tu Sticker Físico
-                </div>
-
                 <div>
-                  <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Calle, Número y Colonia</label>
-                  <input type="text" id="shipping-address-input" required value="${escapeHtml(state.shippingAddress)}" placeholder="Ej. Av. Insurgentes Sur 1450, Col. Del Valle" class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+                  <div class="text-xs font-bold text-zinc-300">
+                    3. Datos de Entrega para el Envío de tus Stickers NFC
+                  </div>
+                  <p class="text-[11px] text-zinc-400 mt-0.5">
+                    Ingresa la dirección donde recibirás tus stickers ya programados con tu información de emergencia.
+                  </p>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Ciudad y Estado</label>
-                    <input type="text" id="shipping-city-input" required value="${escapeHtml(state.shippingCity)}" placeholder="Ej. Ciudad de México, CDMX" class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+                    <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Nombre de quien recibe</label>
+                    <input type="text" id="recipient-name-input" required maxlength="100" value="${escapeHtml(state.recipientName || sticker.fullName)}" placeholder="Ej. Miguel Ángel Rojas" class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
                   </div>
                   <div>
-                    <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Código Postal</label>
-                    <input type="text" id="shipping-zip-input" required maxlength="10" value="${escapeHtml(state.shippingZip)}" placeholder="Ej. 03100" class="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+                    <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Teléfono / WhatsApp de Contacto</label>
+                    <input type="tel" id="recipient-phone-input" required maxlength="30" value="${escapeHtml(state.recipientPhone)}" placeholder="Ej. +52 55 1234 5678" class="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 placeholder:font-sans focus:outline-none focus:border-orange-500" />
                   </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                  <div class="sm:col-span-7">
+                    <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Calle y Número (Ext. / Int.)</label>
+                    <input type="text" id="shipping-street-input" required maxlength="200" value="${escapeHtml(state.shippingStreet)}" placeholder="Ej. Av. Insurgentes Sur 1450 Int. 4B" class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+                  </div>
+                  <div class="sm:col-span-5">
+                    <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Colonia</label>
+                    <input type="text" id="shipping-colony-input" required maxlength="120" value="${escapeHtml(state.shippingColony)}" placeholder="Ej. Col. Del Valle" class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                  <div class="sm:col-span-8">
+                    <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Ciudad, Municipio y Estado</label>
+                    <input type="text" id="shipping-city-input" required maxlength="120" value="${escapeHtml(state.shippingCityState)}" placeholder="Ej. Benito Juárez, Ciudad de México" class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+                  </div>
+                  <div class="sm:col-span-4">
+                    <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Código Postal</label>
+                    <input type="text" id="shipping-zip-input" required maxlength="15" value="${escapeHtml(state.shippingPostalCode)}" placeholder="Ej. 03100" class="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
+                  </div>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-semibold text-zinc-400 mb-1.5">Referencias del domicilio (Opcional)</label>
+                  <input type="text" id="shipping-notes-input" maxlength="250" value="${escapeHtml(state.shippingNotes)}" placeholder="Ej. Entre calle Pilares y Matías Romero, portón negro" class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500" />
                 </div>
               </div>
 
-              <button type="submit" class="w-full py-3.5 px-6 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors cursor-pointer">
-                <span>Ordenar ${escapeHtml(selectedPkg.name)} ($${selectedPkg.price} MXN)</span>
+              <!-- Step 4: Payment Method Summary (Option B: SPEI + WhatsApp) -->
+              <div class="p-4 bg-[#0B0C0E] border border-orange-500/50 rounded-xl space-y-2">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-bold text-orange-400">4. Método de Pago: Transferencia SPEI + WhatsApp</span>
+                  <span class="text-sm font-bold font-mono tabular-nums text-white">Total: $${selectedPkg.price} MXN</span>
+                </div>
+                <p class="text-[11px] text-zinc-400 leading-relaxed">
+                  Al confirmar tu pedido se guardará tu orden con folio único, verás los datos bancarios (CLABE) para realizar tu transferencia SPEI y podrás enviar tu comprobante directo por WhatsApp.
+                </p>
+              </div>
+
+              <button type="submit" ${state.checkoutSubmitting ? 'disabled' : ''} class="w-full py-3.5 px-6 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors cursor-pointer">
+                <span>${
+                  state.checkoutSubmitting
+                    ? 'Registrando tu Pedido...'
+                    : `Confirmar Pedido y Pagar por Transferencia SPEI ($${selectedPkg.price} MXN)`
+                }</span>
               </button>
             </form>
           `
+          }
+
+          ${
+            state.userOrders.length > 0
+              ? `
+            <div class="bg-[#0B0C0E] border border-zinc-800 rounded-2xl p-5 space-y-3">
+              <div class="text-xs font-bold text-zinc-300">
+                Mis Pedidos Registrados (${state.userOrders.length})
+              </div>
+              <div class="space-y-2.5">
+                ${state.userOrders
+                  .map((ord) => {
+                    const stLabel = ORDER_STATUS_LABELS[ord.status] || 'Pendiente de Pago';
+                    return `
+                    <div class="p-3.5 bg-[#14161A] border border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                      <div class="space-y-0.5">
+                        <div class="flex items-center gap-2 flex-wrap">
+                          <span class="font-mono font-bold text-orange-400">#${escapeHtml(ord.orderId.toUpperCase())}</span>
+                          <span class="font-semibold text-white">${escapeHtml(ord.pkgName)}</span>
+                          <span class="font-mono tabular-nums text-zinc-300">· $${ord.totalPrice} MXN</span>
+                          <span class="text-zinc-400">· Estatus: <strong class="text-orange-300">${escapeHtml(stLabel)}</strong></span>
+                        </div>
+                        <div class="text-[11px] text-zinc-400">
+                          Colores: ${(ord.selectedColors || []).map((c, i) => `#${i + 1}: ${escapeHtml(c)}`).join(', ')}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        data-open-order-id="${escapeHtml(ord.orderId)}"
+                        class="view-existing-order-btn px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-orange-400 font-semibold rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+                      >
+                        Ver Datos SPEI / WhatsApp
+                      </button>
+                    </div>
+                  `;
+                  })
+                  .join('')}
+              </div>
+            </div>
+          `
+              : ''
           }
         </div>
       </div>
@@ -1535,6 +1901,19 @@ function renderAdminPanelView() {
     );
   });
 
+  const oq = state.adminOrderSearchQuery.trim().toLowerCase();
+  const filteredOrders = state.adminAllOrders.filter((ord) => {
+    if (!oq) return true;
+    return (
+      String(ord.orderId || '').toLowerCase().includes(oq) ||
+      String(ord.riderName || '').toLowerCase().includes(oq) ||
+      String(ord.recipientName || '').toLowerCase().includes(oq) ||
+      String(ord.recipientPhone || '').toLowerCase().includes(oq) ||
+      String(ord.tagId || '').toLowerCase().includes(oq) ||
+      String(ord.shippingCityState || '').toLowerCase().includes(oq)
+    );
+  });
+
   return `
     <div class="space-y-8">
       <!-- Admin Top Header -->
@@ -1543,14 +1922,28 @@ function renderAdminPanelView() {
           <div class="flex items-center gap-2 text-xs font-bold text-orange-500 mb-1">
             <span>PANEL INTERNO · PERSONAL AUTORIZADO</span>
             <span aria-hidden="true">·</span>
-            <span class="font-mono tabular-nums">${state.adminAllStickers.length} registros totales</span>
+            <span class="font-mono tabular-nums">${state.adminAllOrders.length} pedidos</span>
+            <span aria-hidden="true">·</span>
+            <span class="font-mono tabular-nums">${state.adminAllStickers.length} registros</span>
           </div>
           <h1 class="text-2xl font-bold text-white">
-            Administración de Registros NFC y Opciones de Compra
+            Administración de Pedidos, Registros NFC y Cobro SPEI
           </h1>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2.5">
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            id="admin-tab-orders-btn"
+            class="px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+              state.adminTab === 'orders'
+                ? 'bg-orange-500 text-black'
+                : 'bg-zinc-800 text-zinc-300 hover:text-white'
+            }"
+          >
+            1. Pedidos Recibidos (${state.adminAllOrders.length})
+          </button>
+
           <button
             type="button"
             id="admin-tab-records-btn"
@@ -1560,7 +1953,7 @@ function renderAdminPanelView() {
                 : 'bg-zinc-800 text-zinc-300 hover:text-white'
             }"
           >
-            1. Registros y URLs para Tags NFC (${state.adminAllStickers.length})
+            2. Registros y URLs NFC (${state.adminAllStickers.length})
           </button>
 
           <button
@@ -1572,7 +1965,7 @@ function renderAdminPanelView() {
                 : 'bg-zinc-800 text-zinc-300 hover:text-white'
             }"
           >
-            2. Editar las 3 Opciones de Compra
+            3. Combos y Datos SPEI / WhatsApp
           </button>
 
           <button
@@ -1580,22 +1973,214 @@ function renderAdminPanelView() {
             id="admin-exit-btn"
             class="px-3.5 py-2 rounded-lg text-xs font-semibold bg-zinc-900 border border-zinc-700 text-zinc-300 hover:text-white cursor-pointer"
           >
-            Salir de Administración
+            Salir
           </button>
         </div>
       </div>
 
       ${
-        state.adminTab === 'packages'
+        state.adminTab === 'orders'
           ? `
-        <!-- Section B: Edit the 3 Purchase Options -->
+        <!-- Section Orders: Customer Orders Management -->
+        <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+            <div>
+              <h2 class="text-lg font-bold text-white">
+                Pedidos de Stickers NFC y Confirmaciones SPEI / WhatsApp
+              </h2>
+              <p class="text-xs text-zinc-400 mt-0.5">
+                Revisa los colores elegidos por cada cliente, su dirección de envío, copia su URL NFC para programar el tag y actualiza el estatus del pedido.
+              </p>
+            </div>
+
+            <input
+              type="text"
+              id="admin-order-search-input"
+              value="${escapeHtml(state.adminOrderSearchQuery)}"
+              placeholder="Buscar por folio, cliente, tag o ciudad..."
+              class="w-full sm:w-80 px-4 py-2 text-xs bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-500 focus:outline-none focus:border-orange-500"
+            />
+          </div>
+
+          ${
+            state.adminNfcMessage
+              ? `
+            <div class="p-3.5 bg-zinc-900 border border-orange-500/70 rounded-xl text-xs text-orange-400">
+              ${escapeHtml(state.adminNfcMessage)}
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            filteredOrders.length === 0
+              ? `
+            <div class="py-12 text-center text-sm text-zinc-400">
+              Aún no hay pedidos registrados con ese criterio. Cuando un cliente confirme su compra en el Paso 2 aparecerá aquí.
+            </div>
+          `
+              : `
+            <div class="space-y-4">
+              ${filteredOrders
+                .map((ord) => {
+                  const linkedSticker = state.adminAllStickers.find((s) => s.tagId === ord.tagId);
+                  const nfcUrl = linkedSticker ? buildUniqueStickerUrl(linkedSticker) : '';
+                  const isCopied = state.adminCopiedTagId === `ord-${ord.orderId}`;
+                  const customerCleanPhone = String(ord.recipientPhone || '').replace(/[^0-9]/g, '');
+                  return `
+                  <div class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-4">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <span class="px-2.5 py-1 bg-orange-500 text-black text-xs font-bold font-mono tabular-nums rounded">
+                          #${escapeHtml(String(ord.orderId || '').toUpperCase())}
+                        </span>
+                        <h3 class="text-base font-bold text-white">
+                          ${escapeHtml(ord.pkgName)} · <span class="text-orange-400 font-mono">$${ord.totalPrice} MXN</span>
+                        </h3>
+                        <span class="text-xs font-mono text-zinc-400">
+                          Tag NFC: ${escapeHtml(ord.tagId)} (${escapeHtml(ord.riderName)})
+                        </span>
+                      </div>
+
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <label class="text-[11px] text-zinc-400">Estatus:</label>
+                        <select
+                          data-order-status-id="${escapeHtml(ord.orderId)}"
+                          ${state.adminUpdatingOrderId === ord.orderId ? 'disabled' : ''}
+                          class="admin-order-status-select px-3 py-1.5 text-xs font-bold bg-[#14161A] border border-orange-500/60 rounded-lg text-orange-400 focus:outline-none focus:border-orange-500 cursor-pointer"
+                        >
+                          ${ORDER_STATUSES.map(
+                            (st) => `
+                            <option value="${st}" ${ord.status === st ? 'selected' : ''}>
+                              ${escapeHtml(ORDER_STATUS_LABELS[st])}
+                            </option>
+                          `
+                          ).join('')}
+                        </select>
+
+                        ${
+                          customerCleanPhone
+                            ? `
+                          <a
+                            href="https://wa.me/${escapeHtml(customerCleanPhone)}?text=${encodeURIComponent(
+                              `Hola ${ord.recipientName}, te escribimos de Biker Safe respecto a tu pedido #${String(ord.orderId).toUpperCase()} (${ord.pkgName}).`
+                            )}"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors"
+                          >
+                            Contactar WhatsApp Cliente
+                          </a>
+                        `
+                            : ''
+                        }
+
+                        ${
+                          state.adminConfirmDeleteOrderId === ord.orderId
+                            ? `
+                          <button
+                            type="button"
+                            data-confirm-delete-order="${escapeHtml(ord.orderId)}"
+                            ${state.adminDeletingOrderId === ord.orderId ? 'disabled' : ''}
+                            class="admin-confirm-delete-order-btn px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                          >
+                            ${state.adminDeletingOrderId === ord.orderId ? 'Borrando...' : 'Confirmar Borrado'}
+                          </button>
+                          <button
+                            type="button"
+                            data-cancel-delete-order="${escapeHtml(ord.orderId)}"
+                            class="admin-cancel-delete-order-btn px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                          >
+                            Cancelar
+                          </button>
+                        `
+                            : `
+                          <button
+                            type="button"
+                            data-ask-delete-order="${escapeHtml(ord.orderId)}"
+                            class="admin-ask-delete-order-btn px-3 py-1.5 bg-red-950/70 hover:bg-red-900/80 border border-red-800/70 text-red-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                          >
+                            Borrar Pedido
+                          </button>
+                        `
+                        }
+                      </div>
+                    </div>
+
+                    <!-- Selected Colors and Shipping Details -->
+                    <div class="grid grid-cols-1 md:grid-cols-12 gap-4 text-xs text-zinc-300">
+                      <div class="md:col-span-5 space-y-2">
+                        <span class="text-zinc-500 block">
+                          Colores Solicitados (${ord.stickerCount} ${ord.stickerCount === 1 ? 'sticker' : 'stickers'}):
+                        </span>
+                        <div class="flex flex-wrap gap-1.5">
+                          ${(ord.selectedColors || [])
+                            .map(
+                              (colorName, i) => `
+                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#14161A] border border-zinc-800 text-[11px] text-white font-semibold">
+                              <span class="w-2.5 h-2.5 rounded-full border border-white/25 shrink-0" style="background-color: ${STICKER_COLOR_SWATCHES[colorName] || '#f97316'}"></span>
+                              <span>Sticker #${i + 1}: ${escapeHtml(colorName)}</span>
+                            </span>
+                          `
+                            )
+                            .join('')}
+                        </div>
+                      </div>
+
+                      <div class="md:col-span-7 space-y-1">
+                        <span class="text-zinc-500 block">Datos de Entrega y Envío:</span>
+                        <div>
+                          <strong class="text-white">Recibe:</strong> ${escapeHtml(ord.recipientName)} · <strong class="text-white">Tel:</strong> <span class="font-mono tabular-nums text-orange-300">${escapeHtml(ord.recipientPhone)}</span>
+                        </div>
+                        <div>
+                          <strong class="text-white">Dirección:</strong> ${escapeHtml(ord.shippingStreet)}, Col. ${escapeHtml(ord.shippingColony)}, C.P. <span class="font-mono">${escapeHtml(ord.shippingPostalCode)}</span>, ${escapeHtml(ord.shippingCityState)}
+                        </div>
+                        ${
+                          ord.shippingNotes
+                            ? `<div><strong class="text-white">Referencias:</strong> ${escapeHtml(ord.shippingNotes)}</div>`
+                            : ''
+                        }
+                      </div>
+                    </div>
+
+                    ${
+                      nfcUrl
+                        ? `
+                      <div class="pt-2 border-t border-zinc-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div class="text-[11px] font-mono text-zinc-400 truncate">
+                          <strong class="text-orange-400 font-sans">URL NFC para grabar este pedido:</strong> ${escapeHtml(nfcUrl)}
+                        </div>
+                        <button
+                          type="button"
+                          data-copy-order-url="${escapeHtml(nfcUrl)}"
+                          data-copy-order-id="${escapeHtml(ord.orderId)}"
+                          class="admin-copy-order-url-btn px-3.5 py-1.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg shrink-0 transition-colors cursor-pointer"
+                        >
+                          ${isCopied ? '¡URL Copiada!' : 'Copiar URL NFC'}
+                        </button>
+                      </div>
+                    `
+                        : ''
+                    }
+                  </div>
+                `;
+                })
+                .join('')}
+            </div>
+          `
+          }
+        </div>
+      `
+          : state.adminTab === 'packages'
+          ? `
+        <!-- Section B: Edit the 3 Purchase Options + SPEI / WhatsApp Payment Settings -->
         <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6">
           <div class="border-b border-zinc-800 pb-4">
             <h2 class="text-xl font-bold text-white">
               Configuración de las 3 Opciones de Compra de Tags NFC
             </h2>
             <p class="text-xs text-zinc-400 mt-1">
-              Modifica el título, subtítulo, precio y descripción de los 3 paquetes que ven los clientes en el Paso 2.
+              Modifica el título, subtítulo, precio, cantidad de stickers y colores disponibles de los 3 paquetes.
             </p>
           </div>
 
@@ -1747,6 +2332,145 @@ function renderAdminPanelView() {
                   state.adminSavingPackages
                     ? 'Guardando Opciones...'
                     : 'Guardar Cambios en las 3 Opciones de Compra'
+                }
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Section C: SPEI Bank Transfer & WhatsApp Payment Configuration -->
+        <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6">
+          <div class="border-b border-zinc-800 pb-4">
+            <h2 class="text-xl font-bold text-white">
+              Configuración de Cobro (Opción B: Transferencia SPEI + WhatsApp)
+            </h2>
+            <p class="text-xs text-zinc-400 mt-1">
+              Configura tu cuenta bancaria CLABE y el número de WhatsApp al que los clientes enviarán su pedido y comprobante de transferencia.
+            </p>
+          </div>
+
+          ${
+            state.adminPaymentSavedSuccess
+              ? `
+            <div class="p-4 bg-zinc-900 border border-orange-500 rounded-xl text-xs text-orange-400 font-semibold">
+              ¡Los datos de cobro SPEI y WhatsApp se han guardado correctamente!
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            state.adminPaymentError
+              ? `
+            <div class="p-4 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+              ${escapeHtml(state.adminPaymentError)}
+            </div>
+          `
+              : ''
+          }
+
+          <form id="admin-payment-settings-form" class="space-y-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  Banco Receptor (SPEI)
+                </label>
+                <input
+                  type="text"
+                  id="pay-bank-name"
+                  required
+                  maxlength="80"
+                  value="${escapeHtml(state.paymentSettings.bankName)}"
+                  placeholder="Ej. BBVA México / STP / Nu"
+                  class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  Nombre del Beneficiario
+                </label>
+                <input
+                  type="text"
+                  id="pay-beneficiary-name"
+                  required
+                  maxlength="120"
+                  value="${escapeHtml(state.paymentSettings.beneficiaryName)}"
+                  placeholder="Ej. Rodrigo Gamiño / Biker Safe"
+                  class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  CLABE Interbancaria (18 dígitos)
+                </label>
+                <input
+                  type="text"
+                  id="pay-clabe"
+                  required
+                  minlength="10"
+                  maxlength="24"
+                  value="${escapeHtml(state.paymentSettings.clabe)}"
+                  placeholder="012180001234567890"
+                  class="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-orange-400 font-bold focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  Número de Tarjeta o Cuenta (Opcional)
+                </label>
+                <input
+                  type="text"
+                  id="pay-account-card"
+                  maxlength="30"
+                  value="${escapeHtml(state.paymentSettings.accountOrCard)}"
+                  placeholder="Ej. 4152 3138 0000 0000"
+                  class="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  WhatsApp para recibir Comprobantes (con lada, ej. 521...)
+                </label>
+                <input
+                  type="text"
+                  id="pay-whatsapp-number"
+                  required
+                  maxlength="25"
+                  value="${escapeHtml(state.paymentSettings.whatsappNumber)}"
+                  placeholder="Ej. 5215512345678"
+                  class="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                Instrucciones de Pago para el Cliente
+              </label>
+              <textarea
+                id="pay-instructions"
+                rows="2"
+                maxlength="350"
+                class="w-full px-4 py-2.5 text-xs bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500 resize-y"
+              >${escapeHtml(state.paymentSettings.paymentInstructions)}</textarea>
+            </div>
+
+            <div class="flex justify-end pt-2">
+              <button
+                type="submit"
+                ${state.adminSavingPayment ? 'disabled' : ''}
+                class="px-7 py-3 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                ${
+                  state.adminSavingPayment
+                    ? 'Guardando Datos de Cobro...'
+                    : 'Guardar Configuración SPEI y WhatsApp'
                 }
               </button>
             </div>
@@ -1942,12 +2666,20 @@ function syncFormInputsBeforeReRender() {
   const organDonorEl = document.getElementById('organDonor');
   if (organDonorEl) state.organDonor = organDonorEl.checked;
 
-  const addrEl = document.getElementById('shipping-address-input');
-  if (addrEl) state.shippingAddress = addrEl.value;
+  const recNameEl = document.getElementById('recipient-name-input');
+  if (recNameEl) state.recipientName = recNameEl.value;
+  const recPhoneEl = document.getElementById('recipient-phone-input');
+  if (recPhoneEl) state.recipientPhone = recPhoneEl.value;
+  const streetEl = document.getElementById('shipping-street-input');
+  if (streetEl) state.shippingStreet = streetEl.value;
+  const colEl = document.getElementById('shipping-colony-input');
+  if (colEl) state.shippingColony = colEl.value;
   const cityEl = document.getElementById('shipping-city-input');
-  if (cityEl) state.shippingCity = cityEl.value;
+  if (cityEl) state.shippingCityState = cityEl.value;
   const zipEl = document.getElementById('shipping-zip-input');
-  if (zipEl) state.shippingZip = zipEl.value;
+  if (zipEl) state.shippingPostalCode = zipEl.value;
+  const notesEl = document.getElementById('shipping-notes-input');
+  if (notesEl) state.shippingNotes = notesEl.value;
 
   const adminUserEl = document.getElementById('admin-username-input');
   if (adminUserEl) state.adminUsernameInput = adminUserEl.value;
@@ -1955,6 +2687,21 @@ function syncFormInputsBeforeReRender() {
   if (adminPassEl) state.adminPasswordInput = adminPassEl.value;
   const adminSearchEl = document.getElementById('admin-search-input');
   if (adminSearchEl) state.adminSearchQuery = adminSearchEl.value;
+  const adminOrdSearchEl = document.getElementById('admin-order-search-input');
+  if (adminOrdSearchEl) state.adminOrderSearchQuery = adminOrdSearchEl.value;
+
+  const payBankEl = document.getElementById('pay-bank-name');
+  if (payBankEl) state.paymentSettings.bankName = payBankEl.value;
+  const payBenEl = document.getElementById('pay-beneficiary-name');
+  if (payBenEl) state.paymentSettings.beneficiaryName = payBenEl.value;
+  const payClabeEl = document.getElementById('pay-clabe');
+  if (payClabeEl) state.paymentSettings.clabe = payClabeEl.value;
+  const payAccEl = document.getElementById('pay-account-card');
+  if (payAccEl) state.paymentSettings.accountOrCard = payAccEl.value;
+  const payWaEl = document.getElementById('pay-whatsapp-number');
+  if (payWaEl) state.paymentSettings.whatsappNumber = payWaEl.value;
+  const payInstEl = document.getElementById('pay-instructions');
+  if (payInstEl) state.paymentSettings.paymentInstructions = payInstEl.value;
 
   state.packages = state.packages.map((pkg, idx) => {
     const nameEl = document.getElementById(`pkg-name-${idx}`);
@@ -2350,23 +3097,139 @@ function bindEvents() {
 
   const purchaseForm = document.getElementById('sticker-purchase-form');
   if (purchaseForm) {
-    purchaseForm.addEventListener('submit', (e) => {
+    purchaseForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       syncFormInputsBeforeReRender();
-      const randomNum = Math.floor(100000 + Math.random() * 900000);
-      state.orderFolio = `BS-${randomNum}`;
-      state.orderCompleted = true;
+      state.checkoutError = null;
+
+      if (!state.user || !state.userSticker) {
+        state.checkoutError = 'Inicia sesión y guarda primero tu perfil médico.';
+        renderApp();
+        return;
+      }
+
+      const selectedPkg =
+        state.packages.find((p) => p.pkgId === state.selectedPkgId) ||
+        state.packages[1] ||
+        state.packages[0];
+      const chosenColors = getSelectedColorsForPackage(selectedPkg);
+
+      const recipientName = String(state.recipientName || state.userSticker.fullName || '')
+        .trim()
+        .slice(0, 100);
+      const recipientPhone = String(state.recipientPhone || '')
+        .trim()
+        .slice(0, 30);
+      const shippingStreet = String(state.shippingStreet || '')
+        .trim()
+        .slice(0, 200);
+      const shippingColony = String(state.shippingColony || '')
+        .trim()
+        .slice(0, 120);
+      const shippingCityState = String(state.shippingCityState || '')
+        .trim()
+        .slice(0, 120);
+      const shippingPostalCode = String(state.shippingPostalCode || '')
+        .trim()
+        .slice(0, 15);
+      const shippingNotes = String(state.shippingNotes || '')
+        .trim()
+        .slice(0, 250);
+
+      if (recipientName.length < 2) {
+        state.checkoutError = 'Ingresa el nombre completo de la persona que recibirá el pedido.';
+        renderApp();
+        return;
+      }
+      if (recipientPhone.length < 5 || !SCHEMA_CONSTRAINTS.phonePattern.test(recipientPhone)) {
+        state.checkoutError = 'Ingresa un teléfono de contacto válido.';
+        renderApp();
+        return;
+      }
+      if (shippingStreet.length < 3 || shippingColony.length < 2 || shippingCityState.length < 2 || shippingPostalCode.length < 3) {
+        state.checkoutError = 'Por favor completa calle, colonia, ciudad/estado y código postal.';
+        renderApp();
+        return;
+      }
+
+      const orderId = generateUniqueOrderId();
+      const orderPayload = {
+        orderId,
+        tagId: state.userSticker.tagId,
+        ownerId: state.user.uid,
+        riderName: state.userSticker.fullName,
+        pkgId: selectedPkg.pkgId,
+        pkgName: selectedPkg.name,
+        stickerCount: Math.max(1, Math.min(10, Number(selectedPkg.stickerCount) || 1)),
+        selectedColors: chosenColors,
+        totalPrice: Number(selectedPkg.price) || 249,
+        paymentMethod: 'SPEI_WHATSAPP',
+        status: 'pendiente_pago',
+        recipientName,
+        recipientPhone,
+        shippingStreet,
+        shippingColony,
+        shippingCityState,
+        shippingPostalCode,
+        shippingNotes,
+      };
+
+      state.checkoutSubmitting = true;
       renderApp();
+
+      const docPath = `orders/${orderId}`;
+      try {
+        await setDoc(doc(db, 'orders', orderId), {
+          ...orderPayload,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        state.activeOrder = orderPayload;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.CREATE, docPath);
+      } finally {
+        state.checkoutSubmitting = false;
+        renderApp();
+      }
+    });
+  }
+
+  const copyClabeBtn = document.getElementById('copy-clabe-btn');
+  if (copyClabeBtn) {
+    copyClabeBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(state.paymentSettings.clabe || '');
+        state.copiedClabe = true;
+        renderApp();
+        setTimeout(() => {
+          state.copiedClabe = false;
+          renderApp();
+        }, 2000);
+      } catch {
+        // Ignore clipboard errors
+      }
     });
   }
 
   const newOrderBtn = document.getElementById('new-order-btn');
   if (newOrderBtn) {
     newOrderBtn.addEventListener('click', () => {
-      state.orderCompleted = false;
+      state.activeOrder = null;
       renderApp();
     });
   }
+
+  const viewExistingOrderBtns = document.querySelectorAll('.view-existing-order-btn');
+  viewExistingOrderBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ordId = btn.getAttribute('data-open-order-id');
+      const found = state.userOrders.find((o) => o.orderId === ordId);
+      if (found) {
+        state.activeOrder = found;
+        renderApp();
+      }
+    });
+  });
 
   // ==========================================================================
   // Admin Login & Admin Panel Events
@@ -2437,9 +3300,19 @@ function bindEvents() {
     });
   }
 
+  const adminTabOrdersBtn = document.getElementById('admin-tab-orders-btn');
+  if (adminTabOrdersBtn) {
+    adminTabOrdersBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.adminTab = 'orders';
+      renderApp();
+    });
+  }
+
   const adminTabRecordsBtn = document.getElementById('admin-tab-records-btn');
   if (adminTabRecordsBtn) {
     adminTabRecordsBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
       state.adminTab = 'records';
       renderApp();
     });
@@ -2448,10 +3321,171 @@ function bindEvents() {
   const adminTabPackagesBtn = document.getElementById('admin-tab-packages-btn');
   if (adminTabPackagesBtn) {
     adminTabPackagesBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
       state.adminTab = 'packages';
       state.adminPackagesSavedSuccess = false;
       state.adminPackagesError = null;
+      state.adminPaymentSavedSuccess = false;
+      state.adminPaymentError = null;
       renderApp();
+    });
+  }
+
+  const adminOrderSearchInput = document.getElementById('admin-order-search-input');
+  if (adminOrderSearchInput) {
+    adminOrderSearchInput.addEventListener('input', (e) => {
+      state.adminOrderSearchQuery = e.target.value;
+      const pos = e.target.selectionStart;
+      renderApp();
+      const newInput = document.getElementById('admin-order-search-input');
+      if (newInput) {
+        newInput.focus();
+        newInput.setSelectionRange(pos, pos);
+      }
+    });
+  }
+
+  const adminOrderStatusSelects = document.querySelectorAll('.admin-order-status-select');
+  adminOrderStatusSelects.forEach((selectEl) => {
+    selectEl.addEventListener('change', async (e) => {
+      const orderId = selectEl.getAttribute('data-order-status-id');
+      const nextStatus = e.target.value;
+      if (!orderId || !ORDER_STATUSES.includes(nextStatus)) return;
+      state.adminUpdatingOrderId = orderId;
+      renderApp();
+      const docPath = `orders/${orderId}`;
+      try {
+        await updateDoc(doc(db, 'orders', orderId), {
+          status: nextStatus,
+          updatedAt: serverTimestamp(),
+        });
+        state.adminNfcMessage = `Estatus del pedido #${orderId.toUpperCase()} actualizado a "${ORDER_STATUS_LABELS[nextStatus]}".`;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.UPDATE, docPath);
+      } finally {
+        state.adminUpdatingOrderId = null;
+        renderApp();
+      }
+    });
+  });
+
+  const adminCopyOrderUrlBtns = document.querySelectorAll('.admin-copy-order-url-btn');
+  adminCopyOrderUrlBtns.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const url = btn.getAttribute('data-copy-order-url');
+      const ordId = btn.getAttribute('data-copy-order-id');
+      if (!url || !ordId) return;
+      try {
+        await navigator.clipboard.writeText(url);
+        state.adminCopiedTagId = `ord-${ordId}`;
+        renderApp();
+        setTimeout(() => {
+          state.adminCopiedTagId = null;
+          renderApp();
+        }, 2000);
+      } catch {
+        // Ignore
+      }
+    });
+  });
+
+  const adminAskDeleteOrderBtns = document.querySelectorAll('.admin-ask-delete-order-btn');
+  adminAskDeleteOrderBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.adminConfirmDeleteOrderId = btn.getAttribute('data-ask-delete-order');
+      renderApp();
+    });
+  });
+
+  const adminCancelDeleteOrderBtns = document.querySelectorAll('.admin-cancel-delete-order-btn');
+  adminCancelDeleteOrderBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.adminConfirmDeleteOrderId = null;
+      renderApp();
+    });
+  });
+
+  const adminConfirmDeleteOrderBtns = document.querySelectorAll('.admin-confirm-delete-order-btn');
+  adminConfirmDeleteOrderBtns.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const orderId = btn.getAttribute('data-confirm-delete-order');
+      if (!orderId) return;
+      state.adminDeletingOrderId = orderId;
+      renderApp();
+      const docPath = `orders/${orderId}`;
+      try {
+        await deleteDoc(doc(db, 'orders', orderId));
+        state.adminAllOrders = state.adminAllOrders.filter((o) => o.orderId !== orderId);
+        state.adminConfirmDeleteOrderId = null;
+        state.adminNfcMessage = `Pedido #${orderId.toUpperCase()} eliminado correctamente.`;
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, docPath);
+      } finally {
+        state.adminDeletingOrderId = null;
+        renderApp();
+      }
+    });
+  });
+
+  const adminPaymentForm = document.getElementById('admin-payment-settings-form');
+  if (adminPaymentForm) {
+    adminPaymentForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      syncFormInputsBeforeReRender();
+      state.adminPaymentSavedSuccess = false;
+      state.adminPaymentError = null;
+
+      const bankName = String(state.paymentSettings.bankName || '').trim().slice(0, 80);
+      const beneficiaryName = String(state.paymentSettings.beneficiaryName || '').trim().slice(0, 120);
+      const clabe = String(state.paymentSettings.clabe || '').trim().slice(0, 24);
+      const accountOrCard = String(state.paymentSettings.accountOrCard || '').trim().slice(0, 30);
+      const whatsappNumber = String(state.paymentSettings.whatsappNumber || '').trim().slice(0, 25);
+      const paymentInstructions = String(state.paymentSettings.paymentInstructions || '').trim().slice(0, 350);
+
+      if (bankName.length < 2 || beneficiaryName.length < 2 || clabe.length < 10) {
+        state.adminPaymentError = 'Verifica el nombre del banco, beneficiario y CLABE (mínimo 10 caracteres).';
+        renderApp();
+        return;
+      }
+      if (whatsappNumber.length < 8 || !SCHEMA_CONSTRAINTS.phonePattern.test(whatsappNumber)) {
+        state.adminPaymentError = 'Ingresa un número de WhatsApp válido (ej. 5215512345678).';
+        renderApp();
+        return;
+      }
+
+      state.adminSavingPayment = true;
+      renderApp();
+
+      try {
+        await setDoc(doc(db, 'payment_settings', 'spei'), {
+          settingId: 'spei',
+          bankName,
+          beneficiaryName,
+          clabe,
+          accountOrCard,
+          whatsappNumber,
+          paymentInstructions,
+          updatedAt: serverTimestamp(),
+        });
+        state.paymentSettings = {
+          settingId: 'spei',
+          bankName,
+          beneficiaryName,
+          clabe,
+          accountOrCard,
+          whatsappNumber,
+          paymentInstructions,
+        };
+        state.adminPaymentSavedSuccess = true;
+      } catch (err) {
+        state.adminPaymentError =
+          err instanceof Error
+            ? `Error al guardar configuración SPEI: ${err.message}`
+            : 'No se pudo guardar la configuración de cobro.';
+      } finally {
+        state.adminSavingPayment = false;
+        renderApp();
+      }
     });
   }
 
@@ -2681,6 +3715,7 @@ function bindEvents() {
 // ============================================================================
 function initBikerSafeApp() {
   subscribeToPackages();
+  subscribeToPaymentSettings();
 
   const params = new URLSearchParams(window.location.search);
   const tagParam = params.get('tag');
@@ -2701,13 +3736,20 @@ function initBikerSafeApp() {
     state.authReady = true;
     if (!currentUser) {
       state.userSticker = null;
+      state.userOrders = [];
+      state.activeOrder = null;
       state.hasPopulatedInitialForm = false;
       if (unsubscribeUserStickers) {
         unsubscribeUserStickers();
         unsubscribeUserStickers = null;
       }
+      if (unsubscribeUserOrders) {
+        unsubscribeUserOrders();
+        unsubscribeUserOrders = null;
+      }
     } else {
       subscribeToUserSticker(currentUser);
+      subscribeToUserOrders(currentUser);
       if (!isAuthorizedAdminUser(currentUser)) {
         state.adminAuthenticated = false;
         if (state.viewMode === 'admin_panel') {

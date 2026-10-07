@@ -178,6 +178,111 @@ export interface StickerPackageOption {
   updatedAt?: Timestamp | null;
 }
 
+export const ORDER_STATUSES = [
+  'pendiente_pago',
+  'pagado',
+  'tag_programado',
+  'enviado',
+] as const;
+
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
+
+export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  pendiente_pago: 'Pendiente de Pago',
+  pagado: 'Pagado',
+  tag_programado: 'Tag Programado',
+  enviado: 'Enviado',
+};
+
+export interface StickerOrderRecord {
+  orderId: string;
+  tagId: string;
+  ownerId: string;
+  riderName: string;
+  pkgId: string;
+  pkgName: string;
+  stickerCount: number;
+  selectedColors: string[];
+  totalPrice: number;
+  paymentMethod: 'SPEI_WHATSAPP';
+  status: OrderStatus;
+  recipientName: string;
+  recipientPhone: string;
+  shippingStreet: string;
+  shippingColony: string;
+  shippingCityState: string;
+  shippingPostalCode: string;
+  shippingNotes: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface PaymentSettingsRecord {
+  settingId: string;
+  bankName: string;
+  beneficiaryName: string;
+  clabe: string;
+  accountOrCard: string;
+  whatsappNumber: string;
+  paymentInstructions: string;
+  updatedAt?: Timestamp | null;
+}
+
+export const DEFAULT_PAYMENT_SETTINGS: PaymentSettingsRecord = {
+  settingId: 'spei',
+  bankName: 'BBVA México / Transferencia SPEI',
+  beneficiaryName: 'Biker Safe México',
+  clabe: '012180001234567890',
+  accountOrCard: '4152 3138 0000 0000',
+  whatsappNumber: '5215512345678',
+  paymentInstructions:
+    'Realiza tu transferencia SPEI por el monto exacto indicando tu Folio de Pedido en el concepto y envía tu comprobante por WhatsApp para programar y despachar tus stickers NFC.',
+};
+
+export function generateUniqueOrderId(): string {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let token = 'ord-';
+  const randomValues = new Uint32Array(6);
+  window.crypto.getRandomValues(randomValues);
+  for (let i = 0; i < 6; i++) {
+    token += chars[randomValues[i] % chars.length];
+  }
+  return token;
+}
+
+export function buildWhatsAppOrderUrl(
+  order: Omit<StickerOrderRecord, 'createdAt' | 'updatedAt'>,
+  settings: PaymentSettingsRecord
+): string {
+  const cleanPhone = (settings.whatsappNumber || '').replace(/[^0-9]/g, '');
+  const colorsBreakdown = (order.selectedColors || [])
+    .map((c, i) => `Sticker #${i + 1}: ${c}`)
+    .join(', ');
+
+  const messageLines = [
+    `Hola *Biker Safe*, acabo de registrar mi pedido de Stickers NFC y adjunto mis datos para confirmar el pago por transferencia SPEI:`,
+    ``,
+    `*Folio de Pedido:* ${order.orderId.toUpperCase()}`,
+    `*ID Tag NFC:* ${order.tagId}`,
+    `*Perfil Biker:* ${order.riderName}`,
+    `*Paquete:* ${order.pkgName} (${order.stickerCount} ${order.stickerCount === 1 ? 'sticker' : 'stickers'})`,
+    `*Colores elegidos:* ${colorsBreakdown}`,
+    `*Total a transferir:* $${order.totalPrice} MXN`,
+    ``,
+    `*Datos de Envío:*`,
+    `Recibe: ${order.recipientName} (${order.recipientPhone})`,
+    `Dirección: ${order.shippingStreet}, Col. ${order.shippingColony}, C.P. ${order.shippingPostalCode}, ${order.shippingCityState}`,
+    order.shippingNotes ? `Referencias: ${order.shippingNotes}` : '',
+    ``,
+    `Enseguida envío mi comprobante de pago SPEI.`,
+  ].filter(Boolean);
+
+  const encodedText = encodeURIComponent(messageLines.join('\n'));
+  return cleanPhone
+    ? `https://wa.me/${cleanPhone}?text=${encodedText}`
+    : `https://wa.me/?text=${encodedText}`;
+}
+
 export const AUTHORIZED_ADMIN_EMAIL = 'gami.rodrigo@gmail.com';
 
 export const ALL_STICKER_COLORS = [

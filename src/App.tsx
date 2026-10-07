@@ -40,9 +40,14 @@ import {
   AUTHORIZED_ADMIN_EMAIL,
   EmergencyStickerRecord,
   StickerPackageOption,
+  StickerOrderRecord,
+  PaymentSettingsRecord,
+  OrderStatus,
   DEFAULT_STICKER_PACKAGES,
+  DEFAULT_PAYMENT_SETTINGS,
   normalizePackageOption,
   generateUniqueTagId,
+  generateUniqueOrderId,
   sanitizeAndValidateStickerInput,
   parseEncodedStickerPacket,
 } from './lib/firebase';
@@ -115,15 +120,22 @@ export function BikerSafeApp() {
   );
   const [hasPopulatedInitialForm, setHasPopulatedInitialForm] = useState(false);
 
-  // Configurable 3 purchase packages
+  // Configurable 3 purchase packages & SPEI payment settings
   const [packages, setPackages] = useState<StickerPackageOption[]>(
     DEFAULT_STICKER_PACKAGES
   );
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettingsRecord>(
+    DEFAULT_PAYMENT_SETTINGS
+  );
+  const [userOrders, setUserOrders] = useState<StickerOrderRecord[]>([]);
 
-  // Admin directory of all registered stickers
+  // Admin directory of all registered stickers & orders
   const [adminAllStickers, setAdminAllStickers] = useState<
     EmergencyStickerRecord[]
   >([]);
+  const [adminAllOrders, setAdminAllOrders] = useState<StickerOrderRecord[]>(
+    []
+  );
 
   // Public NFC Landing Page state (when opened via ?tag=... or previewed by admin)
   const [landingTagId, setLandingTagId] = useState('');
@@ -324,7 +336,41 @@ export function BikerSafeApp() {
     return () => unsubscribe();
   }, [authReady, user, hasPopulatedInitialForm]);
 
-  // 6. Subscribe to all active stickers when Authorized Personnel is logged into Admin Panel
+  // 5b. Subscribe to the authenticated user's orders
+  useEffect(() => {
+    if (!authReady || !user) {
+      setUserOrders([]);
+      return;
+    }
+
+    const ordersQuery = query(
+      collection(db, 'orders'),
+      where('ownerId', '==', user.uid)
+    );
+
+    const unsubscribe = onSnapshot(
+      ordersQuery,
+      (snapshot) => {
+        const list: StickerOrderRecord[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push(docSnap.data() as StickerOrderRecord);
+        });
+        list.sort((a, b) => {
+          const ta = a.createdAt?.seconds || 0;
+          const tb = b.createdAt?.seconds || 0;
+          return tb - ta;
+        });
+        setUserOrders(list);
+      },
+      () => {
+        // Ignore if empty
+      }
+    );
+
+    return () => unsubscribe();
+  }, [authReady, user]);
+
+  // 6. Subscribe to all active stickers & orders when Authorized Personnel is logged into Admin Panel
   useEffect(() => {
     if (!authReady || !user || !adminAuthenticated) return;
 
@@ -333,7 +379,7 @@ export function BikerSafeApp() {
       where('isActive', '==', true)
     );
 
-    const unsubscribe = onSnapshot(
+    const unsubscribeStickers = onSnapshot(
       allStickersQuery,
       (snapshot) => {
         const all: EmergencyStickerRecord[] = [];
@@ -354,7 +400,30 @@ export function BikerSafeApp() {
       }
     );
 
-    return () => unsubscribe();
+    const allOrdersQuery = query(collection(db, 'orders'));
+    const unsubscribeOrders = onSnapshot(
+      allOrdersQuery,
+      (snapshot) => {
+        const allOrd: StickerOrderRecord[] = [];
+        snapshot.forEach((docSnap) => {
+          allOrd.push(docSnap.data() as StickerOrderRecord);
+        });
+        allOrd.sort((a, b) => {
+          const ta = a.createdAt?.seconds || 0;
+          const tb = b.createdAt?.seconds || 0;
+          return tb - ta;
+        });
+        setAdminAllOrders(allOrd);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'orders');
+      }
+    );
+
+    return () => {
+      unsubscribeStickers();
+      unsubscribeOrders();
+    };
   }, [authReady, user, adminAuthenticated]);
 
   const handleGoogleSignIn = async () => {
@@ -422,6 +491,85 @@ export function BikerSafeApp() {
         setUserSticker(null);
         setCurrentTagId(null);
       }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, docPath);
+    }
+  };
+
+  const handleCreateOrder = async (
+    orderInput: Omit<
+      StickerOrderRecord,
+      'orderId' | 'ownerId' | 'paymentMethod' | 'status' | 'createdAt' | 'updatedAt'
+    >
+  ): Promise<StickerOrderRecord> => {
+    if (!user) {
+      throw new Error('Inicia sesión para registrar tu pedido.');
+    }
+    const orderId = generateUniqueOrderId();
+    const record: StickerOrderRecord = {
+      orderId,
+      ownerId: user.uid,
+      paymentMethod: 'SPEI_WHATSAPP',
+      status: 'pendiente_pago',
+      ...orderInput,
+    };
+    const docPath = `orders/${orderId}`;
+    try {
+      await setDoc(doc(db, 'orders', orderId), {
+        ...record,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return record;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, docPath);
+    }
+  };
+
+  const handleSavePaymentSettingsFromAdmin = async (
+    updated: PaymentSettingsRecord
+  ) => {
+    const docPath = 'payment_settings/spei';
+    try {
+      await setDoc(doc(db, 'payment_settings', 'spei'), {
+        settingId: 'spei',
+        bankName: updated.bankName.trim().slice(0, 80),
+        beneficiaryName: updated.beneficiaryName.trim().slice(0, 120),
+        clabe: updated.clabe.trim().slice(0, 24),
+        accountOrCard: (updated.accountOrCard || '').trim().slice(0, 30),
+        whatsappNumber: updated.whatsappNumber.trim().slice(0, 25),
+        paymentInstructions: (updated.paymentInstructions || '')
+          .trim()
+          .slice(0, 350),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, docPath);
+    }
+  };
+
+  const handleUpdateOrderStatusFromAdmin = async (
+    orderId: string,
+    status: OrderStatus
+  ) => {
+    const docPath = `orders/${orderId}`;
+    try {
+      await updateDoc(doc(db, 'orders', orderId), {
+        status,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, docPath);
+    }
+  };
+
+  const handleDeleteOrderFromAdmin = async (orderId: string) => {
+    const docPath = `orders/${orderId}`;
+    try {
+      await deleteDoc(doc(db, 'orders', orderId));
+      setAdminAllOrders((prev) =>
+        prev.filter((item) => item.orderId !== orderId)
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, docPath);
     }
@@ -679,8 +827,13 @@ export function BikerSafeApp() {
         ) : viewMode === 'admin_panel' && adminAuthenticated ? (
           <AdminDashboardView
             stickers={adminAllStickers}
+            orders={adminAllOrders}
             packages={packages}
+            paymentSettings={paymentSettings}
             onSavePackages={handleSavePackagesFromAdmin}
+            onSavePaymentSettings={handleSavePaymentSettingsFromAdmin}
+            onUpdateOrderStatus={handleUpdateOrderStatusFromAdmin}
+            onDeleteOrder={handleDeleteOrderFromAdmin}
             onDeleteSticker={handleDeleteStickerFromAdmin}
             onPreviewStickerLanding={(targetSticker) => {
               setLandingSticker(targetSticker);
@@ -732,6 +885,9 @@ export function BikerSafeApp() {
               <StickerPurchaseSection
                 sticker={userSticker}
                 packages={packages}
+                paymentSettings={paymentSettings}
+                userOrders={userOrders}
+                onCreateOrder={handleCreateOrder}
                 onEditProfile={() => setMainStep('profile_form')}
               />
             ) : (

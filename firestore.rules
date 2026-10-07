@@ -214,6 +214,113 @@ service cloud.firestore {
       data.updatedAt is timestamp;
     }
 
+    function isValidStickerOrder(data) {
+      return data.keys().hasAll([
+        'orderId',
+        'tagId',
+        'ownerId',
+        'riderName',
+        'pkgId',
+        'pkgName',
+        'stickerCount',
+        'selectedColors',
+        'totalPrice',
+        'paymentMethod',
+        'status',
+        'recipientName',
+        'recipientPhone',
+        'shippingStreet',
+        'shippingColony',
+        'shippingCityState',
+        'shippingPostalCode',
+        'shippingNotes',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'orderId',
+        'tagId',
+        'ownerId',
+        'riderName',
+        'pkgId',
+        'pkgName',
+        'stickerCount',
+        'selectedColors',
+        'totalPrice',
+        'paymentMethod',
+        'status',
+        'recipientName',
+        'recipientPhone',
+        'shippingStreet',
+        'shippingColony',
+        'shippingCityState',
+        'shippingPostalCode',
+        'shippingNotes',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.orderId is string && data.orderId.size() >= 4 && data.orderId.size() <= 64 && data.orderId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.tagId is string && data.tagId.size() >= 4 && data.tagId.size() <= 64 && data.tagId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      (data.ownerId == request.auth.uid || isAdmin()) &&
+      data.riderName is string && data.riderName.size() >= 2 && data.riderName.size() <= 100 &&
+      data.pkgId is string && data.pkgId.size() >= 2 && data.pkgId.size() <= 32 && data.pkgId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.pkgName is string && data.pkgName.size() >= 2 && data.pkgName.size() <= 80 &&
+      data.stickerCount is number && data.stickerCount >= 1 && data.stickerCount <= 10 &&
+      data.selectedColors is list &&
+      data.selectedColors.size() >= 1 &&
+      data.selectedColors.size() <= 10 &&
+      data.selectedColors[0] is string &&
+      data.selectedColors[0].size() >= 3 &&
+      data.selectedColors[0].size() <= 20 &&
+      data.selectedColors.hasOnly(['Rojo', 'Negro', 'Gris', 'Verde', 'Azul', 'Rosa', 'Morado', 'Amarillo']) &&
+      data.totalPrice is number && data.totalPrice >= 1 && data.totalPrice <= 100000 &&
+      data.paymentMethod is string && data.paymentMethod.size() >= 4 && data.paymentMethod.size() <= 30 &&
+      data.paymentMethod in ['SPEI_WHATSAPP'] &&
+      data.status is string && data.status.size() >= 4 && data.status.size() <= 30 &&
+      data.status in ['pendiente_pago', 'pagado', 'tag_programado', 'enviado'] &&
+      data.recipientName is string && data.recipientName.size() >= 2 && data.recipientName.size() <= 100 &&
+      data.recipientPhone is string && data.recipientPhone.size() >= 5 && data.recipientPhone.size() <= 30 && data.recipientPhone.matches('^[0-9+\\-()\\s]+$') &&
+      data.shippingStreet is string && data.shippingStreet.size() >= 3 && data.shippingStreet.size() <= 200 &&
+      data.shippingColony is string && data.shippingColony.size() >= 2 && data.shippingColony.size() <= 120 &&
+      data.shippingCityState is string && data.shippingCityState.size() >= 2 && data.shippingCityState.size() <= 120 &&
+      data.shippingPostalCode is string && data.shippingPostalCode.size() >= 3 && data.shippingPostalCode.size() <= 15 &&
+      data.shippingNotes is string && data.shippingNotes.size() >= 0 && data.shippingNotes.size() <= 250 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidPaymentSettings(data) {
+      return data.keys().hasAll([
+        'settingId',
+        'bankName',
+        'beneficiaryName',
+        'clabe',
+        'accountOrCard',
+        'whatsappNumber',
+        'paymentInstructions',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'settingId',
+        'bankName',
+        'beneficiaryName',
+        'clabe',
+        'accountOrCard',
+        'whatsappNumber',
+        'paymentInstructions',
+        'updatedAt'
+      ]) &&
+      data.settingId is string && data.settingId.size() >= 2 && data.settingId.size() <= 32 && data.settingId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.bankName is string && data.bankName.size() >= 2 && data.bankName.size() <= 80 &&
+      data.beneficiaryName is string && data.beneficiaryName.size() >= 2 && data.beneficiaryName.size() <= 120 &&
+      data.clabe is string && data.clabe.size() >= 10 && data.clabe.size() <= 24 &&
+      data.accountOrCard is string && data.accountOrCard.size() >= 0 && data.accountOrCard.size() <= 30 &&
+      data.whatsappNumber is string && data.whatsappNumber.size() >= 8 && data.whatsappNumber.size() <= 25 && data.whatsappNumber.matches('^[0-9+\\-()\\s]+$') &&
+      data.paymentInstructions is string && data.paymentInstructions.size() >= 0 && data.paymentInstructions.size() <= 350 &&
+      data.updatedAt is timestamp;
+    }
+
     // =========================================================================
     // Collection 1: /users/{userId}/private/{docId} (PII Split Collection)
     // =========================================================================
@@ -385,6 +492,96 @@ service cloud.firestore {
         );
 
       allow delete: if isAdmin() && isValidPkgId(pkgId);
+    }
+
+    // =========================================================================
+    // Collection 5: /orders/{orderId} (Customer NFC Sticker Orders)
+    // =========================================================================
+    match /orders/{orderId} {
+      allow get: if isVerifiedUser() && isValidTagId(orderId) && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow list: if isVerifiedUser() && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow create: if isVerifiedUser() &&
+        isValidTagId(orderId) &&
+        isValidStickerOrder(incoming()) &&
+        incoming().orderId == orderId &&
+        incoming().ownerId == request.auth.uid &&
+        incoming().status == 'pendiente_pago' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/stickers/$(incoming().tagId)) &&
+        get(/databases/$(database)/documents/stickers/$(incoming().tagId)).data.ownerId == request.auth.uid;
+
+      allow update: if isVerifiedUser() &&
+        isValidTagId(orderId) &&
+        isValidStickerOrder(incoming()) &&
+        incoming().orderId == existing().orderId &&
+        incoming().tagId == existing().tagId &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (existing().ownerId == request.auth.uid &&
+            existing().status == 'pendiente_pago' &&
+            incoming().status == 'pendiente_pago' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'recipientName',
+              'recipientPhone',
+              'shippingStreet',
+              'shippingColony',
+              'shippingCityState',
+              'shippingPostalCode',
+              'shippingNotes',
+              'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser() && isValidTagId(orderId) && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // Collection 6: /payment_settings/{settingId} (SPEI & WhatsApp Config)
+    // =========================================================================
+    match /payment_settings/{settingId} {
+      allow get: if isValidPkgId(settingId);
+      allow list: if existing().settingId == 'spei';
+
+      allow create: if isAdmin() &&
+        isValidPkgId(settingId) &&
+        settingId == 'spei' &&
+        isValidPaymentSettings(incoming()) &&
+        incoming().settingId == settingId &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isAdmin() &&
+        isValidPkgId(settingId) &&
+        isValidPaymentSettings(incoming()) &&
+        incoming().settingId == existing().settingId &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'bankName',
+            'beneficiaryName',
+            'clabe',
+            'accountOrCard',
+            'whatsappNumber',
+            'paymentInstructions',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if isAdmin() && isValidPkgId(settingId);
     }
   }
 }

@@ -22,12 +22,19 @@ import {
 import {
   EmergencyStickerRecord,
   StickerPackageOption,
+  StickerOrderRecord,
+  PaymentSettingsRecord,
+  OrderStatus,
+  ORDER_STATUSES,
+  ORDER_STATUS_LABELS,
   DEFAULT_STICKER_PACKAGES,
+  DEFAULT_PAYMENT_SETTINGS,
   ALL_STICKER_COLORS,
   STICKER_COLOR_SWATCHES,
   AUTHORIZED_ADMIN_EMAIL,
   normalizePackageOption,
   buildUniqueStickerUrl,
+  buildWhatsAppOrderUrl,
 } from '../lib/firebase';
 
 // ============================================================================
@@ -328,12 +335,23 @@ export const PublicEmergencyLandingPage: React.FC<PublicLandingProps> = ({
 interface StickerPurchaseProps {
   sticker: EmergencyStickerRecord;
   packages: StickerPackageOption[];
+  paymentSettings: PaymentSettingsRecord;
+  userOrders: StickerOrderRecord[];
+  onCreateOrder: (
+    orderInput: Omit<
+      StickerOrderRecord,
+      'orderId' | 'ownerId' | 'paymentMethod' | 'status' | 'createdAt' | 'updatedAt'
+    >
+  ) => Promise<StickerOrderRecord>;
   onEditProfile: () => void;
 }
 
 export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
   sticker,
   packages,
+  paymentSettings,
+  userOrders,
+  onCreateOrder,
   onEditProfile,
 }) => {
   const activePackages =
@@ -353,11 +371,20 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
     'Rojo',
     'Negro',
   ]);
-  const [shippingAddress, setShippingAddress] = useState('');
-  const [shippingCity, setShippingCity] = useState('');
-  const [shippingZip, setShippingZip] = useState('');
-  const [orderCompleted, setOrderCompleted] = useState(false);
-  const [orderFolio, setOrderFolio] = useState('');
+  const [recipientName, setRecipientName] = useState(sticker.fullName || '');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [shippingStreet, setShippingStreet] = useState('');
+  const [shippingColony, setShippingColony] = useState('');
+  const [shippingCityState, setShippingCityState] = useState('');
+  const [shippingPostalCode, setShippingPostalCode] = useState('');
+  const [shippingNotes, setShippingNotes] = useState('');
+
+  const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [activeOrder, setActiveOrder] = useState<StickerOrderRecord | null>(
+    null
+  );
+  const [copiedClabe, setCopiedClabe] = useState(false);
 
   const selectedPkg =
     activePackages.find((p) => p.pkgId === selectedPkgId) ||
@@ -392,11 +419,47 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
     });
   };
 
-  const handleConfirmPurchase = (e: React.FormEvent) => {
+  const handleCopyClabe = async () => {
+    try {
+      await navigator.clipboard.writeText(paymentSettings.clabe || '');
+      setCopiedClabe(true);
+      setTimeout(() => setCopiedClabe(false), 2000);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleConfirmPurchase = async (e: React.FormEvent) => {
     e.preventDefault();
-    const randomNum = Math.floor(100000 + Math.random() * 900000);
-    setOrderFolio(`BS-${randomNum}`);
-    setOrderCompleted(true);
+    setCheckoutError(null);
+    setCheckoutSubmitting(true);
+    try {
+      const created = await onCreateOrder({
+        tagId: sticker.tagId,
+        riderName: sticker.fullName,
+        pkgId: selectedPkg.pkgId,
+        pkgName: selectedPkg.name,
+        stickerCount,
+        selectedColors: chosenColors,
+        totalPrice: Number(selectedPkg.price) || 249,
+        recipientName: recipientName.trim() || sticker.fullName,
+        recipientPhone: recipientPhone.trim(),
+        shippingStreet: shippingStreet.trim(),
+        shippingColony: shippingColony.trim(),
+        shippingCityState: shippingCityState.trim(),
+        shippingPostalCode: shippingPostalCode.trim(),
+        shippingNotes: shippingNotes.trim(),
+      });
+      setActiveOrder(created);
+    } catch (err) {
+      setCheckoutError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo registrar el pedido. Verifica tus datos de envío.'
+      );
+    } finally {
+      setCheckoutSubmitting(false);
+    }
   };
 
   return (
@@ -524,61 +587,180 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
           </div>
         </div>
 
-        {/* Right: Package Selector & Checkout Form (7 cols) */}
+        {/* Right: Package Selector, Shipping Form & Option B SPEI + WhatsApp Checkout (7 cols) */}
         <div className="lg:col-span-7 space-y-6">
-          {orderCompleted ? (
-            <div className="bg-[#0B0C0E] border border-orange-500/60 rounded-2xl p-6 sm:p-8 space-y-5">
-              <div className="flex items-center gap-3 text-orange-500">
-                <CheckCircle2 className="w-7 h-7 shrink-0" />
+          {activeOrder ? (
+            <div className="bg-[#0B0C0E] border-2 border-orange-500 rounded-2xl p-6 sm:p-8 space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
                 <div>
-                  <div className="text-xs font-mono text-orange-400">
-                    ORDEN CONFIRMADA · FOLIO {orderFolio}
+                  <div className="flex items-center gap-2 text-xs font-mono text-orange-400">
+                    <span>
+                      PEDIDO REGISTRADO · FOLIO #
+                      {activeOrder.orderId.toUpperCase()}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      {ORDER_STATUS_LABELS[activeOrder.status] ||
+                        'Pendiente de Pago'}
+                    </span>
                   </div>
-                  <h3 className="text-xl font-bold text-white">
-                    ¡Tu Sticker NFC Personalizado está en producción!
+                  <h3 className="text-xl font-bold text-white mt-1">
+                    Paso Final: Pago por Transferencia SPEI y Confirmación por
+                    WhatsApp
                   </h3>
+                </div>
+                <div className="text-left sm:text-right shrink-0">
+                  <span className="block text-[10px] text-zinc-400 uppercase">
+                    Total a Transferir
+                  </span>
+                  <span className="text-2xl font-bold font-mono tabular-nums text-orange-500">
+                    ${activeOrder.totalPrice} MXN
+                  </span>
                 </div>
               </div>
 
-              <p className="text-sm text-zinc-300 leading-relaxed">
-                Hemos recibido tu pedido de <strong>{selectedPkg.name}</strong> vinculado al registro médico de <strong>{sticker.fullName}</strong>. Nuestro personal autorizado configurará tu tag NFC y lo enviará a tu domicilio.
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                {paymentSettings.paymentInstructions}
               </p>
 
+              {/* SPEI Bank Details Card */}
+              <div className="bg-[#14161A] border border-zinc-800 rounded-xl p-5 space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+                  <span className="text-xs font-bold text-orange-400">
+                    DATOS BANCARIOS PARA TRANSFERENCIA SPEI / DEPÓSITO
+                  </span>
+                  <span className="text-[11px] text-zinc-400">0% Comisión</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <span className="text-zinc-500 block">Banco Receptor:</span>
+                    <strong className="text-white text-sm">
+                      {paymentSettings.bankName}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 block">Beneficiario:</span>
+                    <strong className="text-white text-sm">
+                      {paymentSettings.beneficiaryName}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-[#0B0C0E] border border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <span className="text-[11px] text-zinc-400 block">
+                      CLABE Interbancaria:
+                    </span>
+                    <span className="text-base font-bold font-mono tabular-nums text-orange-400 tracking-wider select-all">
+                      {paymentSettings.clabe}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyClabe}
+                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer shrink-0"
+                  >
+                    {copiedClabe ? '¡CLABE Copiada!' : 'Copiar CLABE'}
+                  </button>
+                </div>
+
+                {paymentSettings.accountOrCard ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-1">
+                    <div>
+                      <span className="text-zinc-500 block">
+                        Número de Cuenta / Tarjeta:
+                      </span>
+                      <strong className="text-zinc-200 font-mono tabular-nums">
+                        {paymentSettings.accountOrCard}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-zinc-500 block">
+                        Concepto o Referencia de Pago:
+                      </span>
+                      <strong className="text-orange-400 font-mono tabular-nums">
+                        FOLIO {activeOrder.orderId.toUpperCase()}
+                      </strong>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs">
+                    <span className="text-zinc-500">
+                      Concepto o Referencia de Pago:{' '}
+                    </span>
+                    <strong className="text-orange-400 font-mono tabular-nums">
+                      FOLIO {activeOrder.orderId.toUpperCase()}
+                    </strong>
+                  </div>
+                )}
+              </div>
+
+              {/* Order Summary Box */}
               <div className="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1.5 text-xs text-zinc-300">
                 <div>
                   <strong className="text-white">Paquete:</strong>{' '}
-                  {selectedPkg.name} ({stickerCount}{' '}
-                  {stickerCount === 1 ? 'sticker' : 'stickers'} · $
-                  {selectedPkg.price} MXN)
+                  {activeOrder.pkgName} ({activeOrder.stickerCount}{' '}
+                  {activeOrder.stickerCount === 1 ? 'sticker' : 'stickers'} · $
+                  {activeOrder.totalPrice} MXN)
                 </div>
                 <div>
                   <strong className="text-white">Colores por Sticker:</strong>{' '}
-                  {chosenColors
+                  {(activeOrder.selectedColors || [])
                     .map((c, i) => `Sticker #${i + 1}: ${c}`)
                     .join(' · ')}
                 </div>
                 <div>
-                  <strong className="text-white">Titular del Perfil:</strong>{' '}
-                  {sticker.fullName} ({sticker.bloodType})
+                  <strong className="text-white">Recibe:</strong>{' '}
+                  {activeOrder.recipientName} · Tel:{' '}
+                  <span className="font-mono tabular-nums">
+                    {activeOrder.recipientPhone}
+                  </span>
                 </div>
                 <div>
-                  <strong className="text-white">Dirección de envío:</strong>{' '}
-                  {shippingAddress}, {shippingCity} C.P. {shippingZip}
+                  <strong className="text-white">Dirección de Envío:</strong>{' '}
+                  {activeOrder.shippingStreet}, Col.{' '}
+                  {activeOrder.shippingColony}, C.P.{' '}
+                  {activeOrder.shippingPostalCode},{' '}
+                  {activeOrder.shippingCityState}
+                  {activeOrder.shippingNotes
+                    ? ` (${activeOrder.shippingNotes})`
+                    : ''}
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setOrderCompleted(false)}
-                  className="px-5 py-3 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-xl transition-colors cursor-pointer"
+              {/* Primary Action: Send Order & Receipt via WhatsApp */}
+              <div className="space-y-3 pt-1">
+                <a
+                  href={buildWhatsAppOrderUrl(activeOrder, paymentSettings)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-4 px-6 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors text-center"
                 >
-                  Realizar otro pedido
-                </button>
+                  <span>
+                    Enviar Pedido y Comprobante de Pago por WhatsApp
+                  </span>
+                </a>
+
+                <div className="flex items-center justify-between pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveOrder(null)}
+                    className="text-xs font-semibold text-zinc-400 hover:text-white underline cursor-pointer"
+                  >
+                    ← Realizar otro pedido o cambiar paquete
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
             <form onSubmit={handleConfirmPurchase} className="space-y-6">
+              {checkoutError && (
+                <div className="p-4 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+                  {checkoutError}
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-zinc-300 mb-3">
                   1. Selecciona tu Opción de Compra de Tag NFC
@@ -687,67 +869,206 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                 </div>
               </div>
 
+              {/* Step 3: Shipping Information Form */}
               <div className="space-y-4 pt-2 border-t border-zinc-800">
-                <div className="flex items-center gap-2 text-xs font-bold text-zinc-300">
-                  <Truck className="w-4 h-4 text-orange-500" />
-                  <span>3. Datos de Envío para tu Sticker Físico</span>
-                </div>
-
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                    Calle, Número y Colonia
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={shippingAddress}
-                    onChange={(e) => setShippingAddress(e.target.value)}
-                    placeholder="Ej. Av. Insurgentes Sur 1450, Col. Del Valle"
-                    className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
-                  />
+                  <div className="flex items-center gap-2 text-xs font-bold text-zinc-300">
+                    <Truck className="w-4 h-4 text-orange-500" />
+                    <span>
+                      3. Datos de Entrega para el Envío de tus Stickers NFC
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 mt-0.5">
+                    Ingresa la dirección donde recibirás tus stickers ya programados con tu información de emergencia.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                      Ciudad y Estado
+                      Nombre de quien recibe
                     </label>
                     <input
                       type="text"
                       required
-                      value={shippingCity}
-                      onChange={(e) => setShippingCity(e.target.value)}
-                      placeholder="Ej. Ciudad de México, CDMX"
+                      maxLength={100}
+                      value={recipientName}
+                      onChange={(e) => setRecipientName(e.target.value)}
+                      placeholder="Ej. Miguel Ángel Rojas"
                       className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
                     />
                   </div>
                   <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      Teléfono / WhatsApp de Contacto
+                    </label>
+                    <input
+                      type="tel"
+                      required
+                      maxLength={30}
+                      value={recipientPhone}
+                      onChange={(e) => setRecipientPhone(e.target.value)}
+                      placeholder="Ej. +52 55 1234 5678"
+                      className="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 placeholder:font-sans focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                  <div className="sm:col-span-7">
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      Calle y Número (Ext. / Int.)
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={200}
+                      value={shippingStreet}
+                      onChange={(e) => setShippingStreet(e.target.value)}
+                      placeholder="Ej. Av. Insurgentes Sur 1450 Int. 4B"
+                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                  <div className="sm:col-span-5">
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      Colonia
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={120}
+                      value={shippingColony}
+                      onChange={(e) => setShippingColony(e.target.value)}
+                      placeholder="Ej. Col. Del Valle"
+                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                  <div className="sm:col-span-8">
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                      Ciudad, Municipio y Estado
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={120}
+                      value={shippingCityState}
+                      onChange={(e) => setShippingCityState(e.target.value)}
+                      placeholder="Ej. Benito Juárez, Ciudad de México"
+                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                  <div className="sm:col-span-4">
                     <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
                       Código Postal
                     </label>
                     <input
                       type="text"
                       required
-                      maxLength={10}
-                      value={shippingZip}
-                      onChange={(e) => setShippingZip(e.target.value)}
+                      maxLength={15}
+                      value={shippingPostalCode}
+                      onChange={(e) => setShippingPostalCode(e.target.value)}
                       placeholder="Ej. 03100"
                       className="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
                     />
                   </div>
                 </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                    Referencias del domicilio (Opcional)
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={250}
+                    value={shippingNotes}
+                    onChange={(e) => setShippingNotes(e.target.value)}
+                    placeholder="Ej. Entre calle Pilares y Matías Romero, portón negro"
+                    className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              {/* Step 4: Payment Method Summary (Option B: SPEI + WhatsApp) */}
+              <div className="p-4 bg-[#0B0C0E] border border-orange-500/50 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-orange-400">
+                    4. Método de Pago: Transferencia SPEI + WhatsApp
+                  </span>
+                  <span className="text-sm font-bold font-mono tabular-nums text-white">
+                    Total: ${selectedPkg.price} MXN
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-400 leading-relaxed">
+                  Al confirmar tu pedido se guardará tu orden con folio único, verás los datos bancarios (CLABE) para realizar tu transferencia SPEI y podrás enviar tu comprobante directo por WhatsApp.
+                </p>
               </div>
 
               <button
                 type="submit"
-                className="w-full py-3.5 px-6 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                disabled={checkoutSubmitting}
+                className="w-full py-3.5 px-6 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
                 <ShoppingBag className="w-4 h-4" />
                 <span>
-                  Ordenar {selectedPkg.name} (${selectedPkg.price} MXN)
+                  {checkoutSubmitting
+                    ? 'Registrando tu Pedido...'
+                    : `Confirmar Pedido y Pagar por Transferencia SPEI ($${selectedPkg.price} MXN)`}
                 </span>
               </button>
             </form>
+          )}
+
+          {userOrders.length > 0 && (
+            <div className="bg-[#0B0C0E] border border-zinc-800 rounded-2xl p-5 space-y-3">
+              <div className="text-xs font-bold text-zinc-300">
+                Mis Pedidos Registrados ({userOrders.length})
+              </div>
+              <div className="space-y-2.5">
+                {userOrders.map((ord) => (
+                  <div
+                    key={ord.orderId}
+                    className="p-3.5 bg-[#14161A] border border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono font-bold text-orange-400">
+                          #{ord.orderId.toUpperCase()}
+                        </span>
+                        <span className="font-semibold text-white">
+                          {ord.pkgName}
+                        </span>
+                        <span className="font-mono tabular-nums text-zinc-300">
+                          · ${ord.totalPrice} MXN
+                        </span>
+                        <span className="text-zinc-400">
+                          · Estatus:{' '}
+                          <strong className="text-orange-300">
+                            {ORDER_STATUS_LABELS[ord.status] ||
+                              'Pendiente de Pago'}
+                          </strong>
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-zinc-400">
+                        Colores:{' '}
+                        {(ord.selectedColors || [])
+                          .map((c, i) => `#${i + 1}: ${c}`)
+                          .join(', ')}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveOrder(ord)}
+                      className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-orange-400 font-semibold rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-center"
+                    >
+                      Ver Datos SPEI / WhatsApp
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -935,8 +1256,13 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({
 // ============================================================================
 interface AdminDashboardViewProps {
   stickers: EmergencyStickerRecord[];
+  orders: StickerOrderRecord[];
   packages: StickerPackageOption[];
+  paymentSettings: PaymentSettingsRecord;
   onSavePackages: (updated: StickerPackageOption[]) => Promise<void>;
+  onSavePaymentSettings: (updated: PaymentSettingsRecord) => Promise<void>;
+  onUpdateOrderStatus: (orderId: string, status: OrderStatus) => Promise<void>;
+  onDeleteOrder: (orderId: string) => Promise<void>;
   onDeleteSticker: (sticker: EmergencyStickerRecord) => Promise<void>;
   onPreviewStickerLanding: (sticker: EmergencyStickerRecord) => void;
   onExitAdmin: () => void;
@@ -944,30 +1270,54 @@ interface AdminDashboardViewProps {
 
 export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   stickers,
+  orders,
   packages,
+  paymentSettings,
   onSavePackages,
+  onSavePaymentSettings,
+  onUpdateOrderStatus,
+  onDeleteOrder,
   onDeleteSticker,
   onPreviewStickerLanding,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'records' | 'packages'>('records');
+  const [activeTab, setActiveTab] = useState<'orders' | 'records' | 'packages'>(
+    'orders'
+  );
   const [searchQuery, setSearchQuery] = useState('');
+  const [orderSearchQuery, setOrderSearchQuery] = useState('');
   const [copiedTagId, setCopiedTagId] = useState<string | null>(null);
   const [confirmDeleteTagId, setConfirmDeleteTagId] = useState<string | null>(
     null
   );
   const [deletingTagId, setDeletingTagId] = useState<string | null>(null);
+  const [confirmDeleteOrderId, setConfirmDeleteOrderId] = useState<
+    string | null
+  >(null);
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
+  const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
   const [nfcMessage, setNfcMessage] = useState<string | null>(null);
 
-  const [editablePackages, setEditablePackages] = useState<StickerPackageOption[]>(
-    () =>
-      (packages && packages.length === 3 ? packages : DEFAULT_STICKER_PACKAGES).map(
-        (p, idx) => normalizePackageOption(p, idx)
-      )
+  const [editablePackages, setEditablePackages] = useState<
+    StickerPackageOption[]
+  >(() =>
+    (packages && packages.length === 3
+      ? packages
+      : DEFAULT_STICKER_PACKAGES
+    ).map((p, idx) => normalizePackageOption(p, idx))
   );
   const [savingPackages, setSavingPackages] = useState(false);
   const [packagesSavedSuccess, setPackagesSavedSuccess] = useState(false);
   const [packagesError, setPackagesError] = useState<string | null>(null);
+
+  const [editablePayment, setEditablePayment] = useState<PaymentSettingsRecord>(
+    () => ({
+      ...(paymentSettings || DEFAULT_PAYMENT_SETTINGS),
+    })
+  );
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [paymentSavedSuccess, setPaymentSavedSuccess] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
   const q = searchQuery.trim().toLowerCase();
   const filteredStickers = stickers.filter((s) => {
@@ -977,6 +1327,19 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       s.tagId.toLowerCase().includes(q) ||
       s.bloodType.toLowerCase().includes(q) ||
       s.emergencyContactName.toLowerCase().includes(q)
+    );
+  });
+
+  const oq = orderSearchQuery.trim().toLowerCase();
+  const filteredOrders = orders.filter((ord) => {
+    if (!oq) return true;
+    return (
+      ord.orderId.toLowerCase().includes(oq) ||
+      ord.riderName.toLowerCase().includes(oq) ||
+      ord.recipientName.toLowerCase().includes(oq) ||
+      ord.recipientPhone.toLowerCase().includes(oq) ||
+      ord.tagId.toLowerCase().includes(oq) ||
+      ord.shippingCityState.toLowerCase().includes(oq)
     );
   });
 
@@ -1001,6 +1364,52 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
       );
     } finally {
       setDeletingTagId(null);
+    }
+  };
+
+  const handleConfirmDeleteOrder = async (orderId: string) => {
+    setDeletingOrderId(orderId);
+    setNfcMessage(null);
+    try {
+      await onDeleteOrder(orderId);
+      setConfirmDeleteOrderId(null);
+      setNfcMessage(`Pedido #${orderId.toUpperCase()} eliminado correctamente.`);
+    } finally {
+      setDeletingOrderId(null);
+    }
+  };
+
+  const handleOrderStatusChange = async (
+    orderId: string,
+    nextStatus: OrderStatus
+  ) => {
+    setUpdatingOrderId(orderId);
+    try {
+      await onUpdateOrderStatus(orderId, nextStatus);
+      setNfcMessage(
+        `Estatus del pedido #${orderId.toUpperCase()} actualizado a "${ORDER_STATUS_LABELS[nextStatus]}".`
+      );
+    } finally {
+      setUpdatingOrderId(null);
+    }
+  };
+
+  const handleSubmitPaymentSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingPayment(true);
+    setPaymentSavedSuccess(false);
+    setPaymentError(null);
+    try {
+      await onSavePaymentSettings(editablePayment);
+      setPaymentSavedSuccess(true);
+    } catch (err) {
+      setPaymentError(
+        err instanceof Error
+          ? err.message
+          : 'Error al guardar la configuración de cobro SPEI y WhatsApp.'
+      );
+    } finally {
+      setSavingPayment(false);
     }
   };
 
@@ -1093,15 +1502,31 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             <span>PANEL INTERNO · PERSONAL AUTORIZADO</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono tabular-nums">
-              {stickers.length} registros totales
+              {orders.length} pedidos
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono tabular-nums">
+              {stickers.length} registros
             </span>
           </div>
           <h1 className="text-2xl font-bold text-white">
-            Administración de Registros NFC y Opciones de Compra
+            Administración de Pedidos, Registros NFC y Cobro SPEI
           </h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab('orders')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+              activeTab === 'orders'
+                ? 'bg-orange-500 text-black'
+                : 'bg-zinc-800 text-zinc-300 hover:text-white'
+            }`}
+          >
+            1. Pedidos Recibidos ({orders.length})
+          </button>
+
           <button
             type="button"
             onClick={() => setActiveTab('records')}
@@ -1111,7 +1536,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                 : 'bg-zinc-800 text-zinc-300 hover:text-white'
             }`}
           >
-            1. Registros y URLs para Tags NFC ({stickers.length})
+            2. Registros y URLs NFC ({stickers.length})
           </button>
 
           <button
@@ -1123,8 +1548,13 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                   : DEFAULT_STICKER_PACKAGES
                 ).map((p, idx) => normalizePackageOption(p, idx))
               );
+              setEditablePayment({
+                ...(paymentSettings || DEFAULT_PAYMENT_SETTINGS),
+              });
               setPackagesSavedSuccess(false);
               setPackagesError(null);
+              setPaymentSavedSuccess(false);
+              setPaymentError(null);
               setActiveTab('packages');
             }}
             className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
@@ -1134,7 +1564,7 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             }`}
           >
             <Settings className="w-3.5 h-3.5" />
-            <span>2. Editar las 3 Opciones de Compra</span>
+            <span>3. Combos y Datos SPEI / WhatsApp</span>
           </button>
 
           <button
@@ -1143,12 +1573,242 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-zinc-900 border border-zinc-700 text-zinc-300 hover:text-white cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5 text-orange-500" />
-            <span>Salir de Administración</span>
+            <span>Salir</span>
           </button>
         </div>
       </div>
 
-      {activeTab === 'packages' ? (
+      {activeTab === 'orders' ? (
+        <div className="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+            <div>
+              <h2 className="text-lg font-bold text-white">
+                Pedidos de Stickers NFC y Confirmaciones SPEI / WhatsApp
+              </h2>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Revisa los colores elegidos por cada cliente, su dirección de envío, copia su URL NFC para programar el tag y actualiza el estatus del pedido.
+              </p>
+            </div>
+
+            <div className="relative w-full sm:w-80">
+              <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={orderSearchQuery}
+                onChange={(e) => setOrderSearchQuery(e.target.value)}
+                placeholder="Buscar por folio, cliente, tag o ciudad..."
+                className="w-full pl-9 pr-4 py-2 text-xs bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-500 focus:outline-none focus:border-orange-500"
+              />
+            </div>
+          </div>
+
+          {nfcMessage && (
+            <div className="p-3.5 bg-zinc-900 border border-orange-500/70 rounded-xl text-xs text-orange-400">
+              {nfcMessage}
+            </div>
+          )}
+
+          {filteredOrders.length === 0 ? (
+            <div className="py-12 text-center text-sm text-zinc-400">
+              Aún no hay pedidos registrados con ese criterio. Cuando un cliente confirme su compra en el Paso 2 aparecerá aquí.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {filteredOrders.map((ord) => {
+                const linkedSticker = stickers.find(
+                  (s) => s.tagId === ord.tagId
+                );
+                const nfcUrl = linkedSticker
+                  ? buildUniqueStickerUrl(linkedSticker)
+                  : '';
+                const isCopied = copiedTagId === `ord-${ord.orderId}`;
+                const customerCleanPhone = (ord.recipientPhone || '').replace(
+                  /[^0-9]/g,
+                  ''
+                );
+
+                return (
+                  <div
+                    key={ord.orderId}
+                    className="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-4"
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <span className="px-2.5 py-1 bg-orange-500 text-black text-xs font-bold font-mono tabular-nums rounded">
+                          #{ord.orderId.toUpperCase()}
+                        </span>
+                        <h3 className="text-base font-bold text-white">
+                          {ord.pkgName} ·{' '}
+                          <span className="text-orange-400 font-mono">
+                            ${ord.totalPrice} MXN
+                          </span>
+                        </h3>
+                        <span className="text-xs font-mono text-zinc-400">
+                          Tag NFC: {ord.tagId} ({ord.riderName})
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <label className="text-[11px] text-zinc-400">
+                          Estatus:
+                        </label>
+                        <select
+                          disabled={updatingOrderId === ord.orderId}
+                          value={ord.status}
+                          onChange={(e) =>
+                            handleOrderStatusChange(
+                              ord.orderId,
+                              e.target.value as OrderStatus
+                            )
+                          }
+                          className="px-3 py-1.5 text-xs font-bold bg-[#14161A] border border-orange-500/60 rounded-lg text-orange-400 focus:outline-none focus:border-orange-500 cursor-pointer"
+                        >
+                          {ORDER_STATUSES.map((st) => (
+                            <option key={st} value={st}>
+                              {ORDER_STATUS_LABELS[st]}
+                            </option>
+                          ))}
+                        </select>
+
+                        {customerCleanPhone && (
+                          <a
+                            href={`https://wa.me/${customerCleanPhone}?text=${encodeURIComponent(
+                              `Hola ${ord.recipientName}, te escribimos de Biker Safe respecto a tu pedido #${ord.orderId.toUpperCase()} (${ord.pkgName}).`
+                            )}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors"
+                          >
+                            Contactar WhatsApp Cliente
+                          </a>
+                        )}
+
+                        {confirmDeleteOrderId === ord.orderId ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={deletingOrderId === ord.orderId}
+                              onClick={() =>
+                                handleConfirmDeleteOrder(ord.orderId)
+                              }
+                              className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                            >
+                              {deletingOrderId === ord.orderId
+                                ? 'Borrando...'
+                                : 'Confirmar Borrado'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteOrderId(null)}
+                              className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setConfirmDeleteOrderId(ord.orderId)
+                            }
+                            className="px-3 py-1.5 bg-red-950/70 hover:bg-red-900/80 border border-red-800/70 text-red-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                          >
+                            Borrar Pedido
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Selected Colors & Shipping Details */}
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 text-xs text-zinc-300">
+                      <div className="md:col-span-5 space-y-2">
+                        <span className="text-zinc-500 block">
+                          Colores Solicitados ({ord.stickerCount}{' '}
+                          {ord.stickerCount === 1 ? 'sticker' : 'stickers'}):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(ord.selectedColors || []).map((colorName, i) => (
+                            <span
+                              key={i}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#14161A] border border-zinc-800 text-[11px] text-white font-semibold"
+                            >
+                              <span
+                                className="w-2.5 h-2.5 rounded-full border border-white/25 shrink-0"
+                                style={{
+                                  backgroundColor:
+                                    STICKER_COLOR_SWATCHES[colorName] ||
+                                    '#f97316',
+                                }}
+                              />
+                              <span>
+                                Sticker #{i + 1}: {colorName}
+                              </span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="md:col-span-7 space-y-1">
+                        <span className="text-zinc-500 block">
+                          Datos de Entrega y Envío:
+                        </span>
+                        <div>
+                          <strong className="text-white">Recibe:</strong>{' '}
+                          {ord.recipientName} ·{' '}
+                          <strong className="text-white">Tel:</strong>{' '}
+                          <span className="font-mono tabular-nums text-orange-300">
+                            {ord.recipientPhone}
+                          </span>
+                        </div>
+                        <div>
+                          <strong className="text-white">Dirección:</strong>{' '}
+                          {ord.shippingStreet}, Col. {ord.shippingColony}, C.P.{' '}
+                          <span className="font-mono">
+                            {ord.shippingPostalCode}
+                          </span>
+                          , {ord.shippingCityState}
+                        </div>
+                        {ord.shippingNotes && (
+                          <div>
+                            <strong className="text-white">Referencias:</strong>{' '}
+                            {ord.shippingNotes}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {nfcUrl && (
+                      <div className="pt-2 border-t border-zinc-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="text-[11px] font-mono text-zinc-400 truncate">
+                          <strong className="text-orange-400 font-sans">
+                            URL NFC para grabar este pedido:
+                          </strong>{' '}
+                          {nfcUrl}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(nfcUrl);
+                              setCopiedTagId(`ord-${ord.orderId}`);
+                              setTimeout(() => setCopiedTagId(null), 2000);
+                            } catch {
+                              // Ignore
+                            }
+                          }}
+                          className="px-3.5 py-1.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg shrink-0 transition-colors cursor-pointer"
+                        >
+                          {isCopied ? '¡URL Copiada!' : 'Copiar URL NFC'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : activeTab === 'packages' ? (
         <div className="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6">
           <div className="border-b border-zinc-800 pb-4">
             <h2 className="text-xl font-bold text-white">
@@ -1337,6 +1997,158 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </button>
             </div>
           </form>
+
+          {/* SPEI & WhatsApp Payment Configuration */}
+          <div className="pt-8 border-t border-zinc-800 space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-white">
+                Configuración de Cobro (Opción B: Transferencia SPEI + WhatsApp)
+              </h2>
+              <p className="text-xs text-zinc-400 mt-1">
+                Configura tu cuenta bancaria CLABE y el número de WhatsApp al que los clientes enviarán su pedido y comprobante de transferencia.
+              </p>
+            </div>
+
+            {paymentSavedSuccess && (
+              <div className="p-4 bg-zinc-900 border border-orange-500 rounded-xl text-xs text-orange-400 font-semibold">
+                ¡Los datos de cobro SPEI y WhatsApp se han guardado correctamente!
+              </div>
+            )}
+
+            {paymentError && (
+              <div className="p-4 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+                {paymentError}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitPaymentSettings} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                    Banco Receptor (SPEI)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={80}
+                    value={editablePayment.bankName}
+                    onChange={(e) =>
+                      setEditablePayment((prev) => ({
+                        ...prev,
+                        bankName: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                    Nombre del Beneficiario
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={120}
+                    value={editablePayment.beneficiaryName}
+                    onChange={(e) =>
+                      setEditablePayment((prev) => ({
+                        ...prev,
+                        beneficiaryName: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                    CLABE Interbancaria (18 dígitos)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    minLength={10}
+                    maxLength={24}
+                    value={editablePayment.clabe}
+                    onChange={(e) =>
+                      setEditablePayment((prev) => ({
+                        ...prev,
+                        clabe: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-orange-400 font-bold focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                    Número de Tarjeta o Cuenta (Opcional)
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={30}
+                    value={editablePayment.accountOrCard}
+                    onChange={(e) =>
+                      setEditablePayment((prev) => ({
+                        ...prev,
+                        accountOrCard: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                    WhatsApp para recibir Comprobantes
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={25}
+                    value={editablePayment.whatsappNumber}
+                    onChange={(e) =>
+                      setEditablePayment((prev) => ({
+                        ...prev,
+                        whatsappNumber: e.target.value,
+                      }))
+                    }
+                    className="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  Instrucciones de Pago para el Cliente
+                </label>
+                <textarea
+                  rows={2}
+                  maxLength={350}
+                  value={editablePayment.paymentInstructions}
+                  onChange={(e) =>
+                    setEditablePayment((prev) => ({
+                      ...prev,
+                      paymentInstructions: e.target.value,
+                    }))
+                  }
+                  className="w-full px-4 py-2.5 text-xs bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500 resize-y"
+                />
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="submit"
+                  disabled={savingPayment}
+                  className="px-7 py-3 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+                >
+                  {savingPayment
+                    ? 'Guardando Datos de Cobro...'
+                    : 'Guardar Configuración SPEI y WhatsApp'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       ) : (
         <div className="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 space-y-6">

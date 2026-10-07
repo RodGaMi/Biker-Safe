@@ -32,16 +32,22 @@ import {
 interface PublicLandingProps {
   sticker: EmergencyStickerRecord | null;
   loading: boolean;
+  isOwnerViewing?: boolean;
   isAdminPreview?: boolean;
   onBackToMainScreen: () => void;
+  onEditOwnerInfo?: () => void;
+  onBuyOwnerSticker?: () => void;
   onBackToAdmin?: () => void;
 }
 
 export const PublicEmergencyLandingPage: React.FC<PublicLandingProps> = ({
   sticker,
   loading,
+  isOwnerViewing,
   isAdminPreview,
   onBackToMainScreen,
+  onEditOwnerInfo,
+  onBuyOwnerSticker,
   onBackToAdmin,
 }) => {
   if (loading) {
@@ -94,6 +100,43 @@ export const PublicEmergencyLandingPage: React.FC<PublicLandingProps> = ({
             <ArrowLeft className="w-3.5 h-3.5" />
             <span>Volver al Panel de Administración</span>
           </button>
+        </div>
+      )}
+
+      {isOwnerViewing && onEditOwnerInfo && (
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-[#14161A] border border-zinc-800 rounded-xl px-5 py-3.5">
+          <div className="flex items-center gap-2 text-xs text-zinc-300">
+            <span className="w-2 h-2 rounded-full bg-orange-500" />
+            <span className="font-semibold text-white">
+              Tu Perfil de Emergencia Activo
+            </span>
+            <span aria-hidden="true" className="text-zinc-600">
+              ·
+            </span>
+            <span className="font-mono tabular-nums text-orange-400">
+              {sticker.tagId}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onEditOwnerInfo}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Editar mi Información</span>
+            </button>
+            {onBuyOwnerSticker && (
+              <button
+                type="button"
+                onClick={onBuyOwnerSticker}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                <ShoppingBag className="w-3.5 h-3.5 text-orange-500" />
+                <span>Comprar Sticker NFC</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 

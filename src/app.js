@@ -573,6 +573,15 @@ function subscribeToUserSticker(user) {
           state.insuranceDetails = primaryRecord.insuranceDetails || '';
           state.organDonor = Boolean(primaryRecord.organDonor);
           state.hasPopulatedInitialForm = true;
+
+          // Automatically send registered user to their Landing Page upon sign-in
+          state.landingSticker = primaryRecord;
+          state.landingTagId = primaryRecord.tagId;
+          if (state.viewMode !== 'admin_login' && state.viewMode !== 'admin_panel') {
+            state.viewMode = 'public_landing';
+          }
+        } else if (state.landingTagId === primaryRecord.tagId) {
+          state.landingSticker = primaryRecord;
         }
       }
       renderApp();
@@ -666,6 +675,13 @@ function renderPublicLandingView() {
     `;
   }
 
+  const isOwnerViewing = Boolean(
+    state.user &&
+      sticker &&
+      (sticker.ownerId === state.user.uid ||
+        (state.userSticker && state.userSticker.tagId === sticker.tagId))
+  );
+
   return `
     <div class="max-w-4xl mx-auto space-y-6">
       ${
@@ -678,6 +694,29 @@ function renderPublicLandingView() {
           <button type="button" id="back-to-admin-btn" class="px-3.5 py-1.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer">
             ← Volver al Panel de Administración
           </button>
+        </div>
+      `
+          : ''
+      }
+
+      ${
+        isOwnerViewing
+          ? `
+        <div class="flex flex-wrap items-center justify-between gap-3 bg-[#14161A] border border-zinc-800 rounded-xl px-5 py-3.5">
+          <div class="flex items-center gap-2 text-xs text-zinc-300">
+            <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+            <span class="font-semibold text-white">Tu Perfil de Emergencia Activo</span>
+            <span aria-hidden="true" class="text-zinc-600">·</span>
+            <span class="font-mono tabular-nums text-orange-400">${escapeHtml(sticker.tagId)}</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-2.5">
+            <button type="button" id="owner-edit-info-btn" class="inline-flex items-center gap-1.5 px-4 py-2 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer">
+              <span>Editar mi Información</span>
+            </button>
+            <button type="button" id="owner-buy-sticker-btn" class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer">
+              <span>Comprar Sticker NFC</span>
+            </button>
+          </div>
         </div>
       `
           : ''
@@ -1614,6 +1653,16 @@ export function renderApp() {
               2. Compra de Sticker NFC Personalizado
             </button>
           </div>
+
+          ${
+            state.userSticker
+              ? `
+            <button type="button" id="step-open-landing-btn" class="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-orange-400 text-xs font-bold rounded-lg transition-colors cursor-pointer self-start sm:self-auto">
+              Ver mi Información (Landing Page)
+            </button>
+          `
+              : ''
+          }
         </div>
 
         ${
@@ -1724,6 +1773,18 @@ function bindEvents() {
       if (!state.userSticker) return;
       syncFormInputsBeforeReRender();
       state.mainStep = 'sticker_checkout';
+      renderApp();
+    });
+  }
+
+  const stepOpenLandingBtn = document.getElementById('step-open-landing-btn');
+  if (stepOpenLandingBtn) {
+    stepOpenLandingBtn.addEventListener('click', () => {
+      if (!state.userSticker) return;
+      syncFormInputsBeforeReRender();
+      state.landingSticker = state.userSticker;
+      state.landingTagId = state.userSticker.tagId;
+      state.viewMode = 'public_landing';
       renderApp();
     });
   }
@@ -1866,6 +1927,24 @@ function bindEvents() {
   if (backToAdminBtn) {
     backToAdminBtn.addEventListener('click', () => {
       state.viewMode = 'admin_panel';
+      renderApp();
+    });
+  }
+
+  const ownerEditInfoBtn = document.getElementById('owner-edit-info-btn');
+  if (ownerEditInfoBtn) {
+    ownerEditInfoBtn.addEventListener('click', () => {
+      state.viewMode = 'main';
+      state.mainStep = 'profile_form';
+      renderApp();
+    });
+  }
+
+  const ownerBuyStickerBtn = document.getElementById('owner-buy-sticker-btn');
+  if (ownerBuyStickerBtn) {
+    ownerBuyStickerBtn.addEventListener('click', () => {
+      state.viewMode = 'main';
+      state.mainStep = 'sticker_checkout';
       renderApp();
     });
   }

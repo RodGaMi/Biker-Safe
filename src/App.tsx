@@ -271,6 +271,19 @@ export function BikerSafeApp() {
             setInsuranceDetails(primaryRecord.insuranceDetails || '');
             setOrganDonor(Boolean(primaryRecord.organDonor));
             setHasPopulatedInitialForm(true);
+
+            // Automatically send registered user to their Landing Page on login
+            setLandingSticker(primaryRecord);
+            setLandingTagId(primaryRecord.tagId);
+            setViewMode((prev) =>
+              prev === 'admin_login' || prev === 'admin_panel'
+                ? prev
+                : 'public_landing'
+            );
+          } else {
+            setLandingSticker((prev) =>
+              prev && prev.tagId === primaryRecord.tagId ? primaryRecord : prev
+            );
           }
         }
       },
@@ -531,9 +544,24 @@ export function BikerSafeApp() {
           <PublicEmergencyLandingPage
             sticker={landingSticker || userSticker}
             loading={loadingLandingSticker}
+            isOwnerViewing={Boolean(
+              user &&
+                (landingSticker || userSticker) &&
+                ((landingSticker || userSticker)?.ownerId === user.uid ||
+                  (userSticker &&
+                    userSticker.tagId === (landingSticker || userSticker)?.tagId))
+            )}
             isAdminPreview={adminAuthenticated}
             onBackToMainScreen={() => {
               setViewMode('main');
+            }}
+            onEditOwnerInfo={() => {
+              setViewMode('main');
+              setMainStep('profile_form');
+            }}
+            onBuyOwnerSticker={() => {
+              setViewMode('main');
+              setMainStep('sticker_checkout');
             }}
             onBackToAdmin={() => {
               setViewMode('admin_panel');

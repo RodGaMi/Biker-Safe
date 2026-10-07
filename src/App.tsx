@@ -24,10 +24,7 @@ import {
   LogIn,
   AlertCircle,
   CheckCircle2,
-  ShoppingBag,
-  ExternalLink,
   ShieldCheck,
-  UserCheck,
 } from 'lucide-react';
 import {
   auth,
@@ -38,6 +35,8 @@ import {
   handleFirestoreError,
   BLOOD_TYPES,
   EmergencyStickerRecord,
+  StickerPackageOption,
+  DEFAULT_STICKER_PACKAGES,
   generateUniqueTagId,
   sanitizeAndValidateStickerInput,
   parseEncodedStickerPacket,
@@ -46,9 +45,11 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   PublicEmergencyLandingPage,
   StickerPurchaseSection,
+  AdminLoginView,
+  AdminDashboardView,
 } from './components/EmergencyViews';
 
-type ViewMode = 'main' | 'public_landing';
+type ViewMode = 'main' | 'public_landing' | 'admin_login' | 'admin_panel';
 type MainStep = 'profile_form' | 'sticker_checkout';
 
 function MotorcycleBrandIcon() {
@@ -77,9 +78,9 @@ export function BikerSafeApp() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
-  // Navigation mode: 'main' (Pantalla Principal: Perfil Seguro + Compra de Sticker) or 'public_landing' (Landing Page del Tag NFC)
   const [viewMode, setViewMode] = useState<ViewMode>('main');
   const [mainStep, setMainStep] = useState<MainStep>('profile_form');
+  const [adminAuthenticated, setAdminAuthenticated] = useState(false);
 
   // Form states for user's medical emergency profile
   const [currentTagId, setCurrentTagId] = useState<string | null>(null);
@@ -107,7 +108,17 @@ export function BikerSafeApp() {
   );
   const [hasPopulatedInitialForm, setHasPopulatedInitialForm] = useState(false);
 
-  // Public NFC Landing Page state (when opened via ?tag=... or previewed)
+  // Configurable 3 purchase packages
+  const [packages, setPackages] = useState<StickerPackageOption[]>(
+    DEFAULT_STICKER_PACKAGES
+  );
+
+  // Admin directory of all registered stickers
+  const [adminAllStickers, setAdminAllStickers] = useState<
+    EmergencyStickerRecord[]
+  >([]);
+
+  // Public NFC Landing Page state (when opened via ?tag=... or previewed by admin)
   const [landingTagId, setLandingTagId] = useState('');
   const [landingSticker, setLandingSticker] =
     useState<EmergencyStickerRecord | null>(null);
@@ -121,12 +132,40 @@ export function BikerSafeApp() {
       if (!currentUser) {
         setUserSticker(null);
         setHasPopulatedInitialForm(false);
+        setAdminAuthenticated(false);
       }
     });
     return () => unsubscribe();
   }, []);
 
-  // 2. Inspect URL parameters on boot for direct NFC Tag Scan (?tag=msm-xxxx&p=...)
+  // 2. Subscribe to the 3 purchase packages from Firestore
+  useEffect(() => {
+    const pkgQuery = query(
+      collection(db, 'packages'),
+      where('sortOrder', '>=', 1)
+    );
+    const unsubscribe = onSnapshot(
+      pkgQuery,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const loaded: StickerPackageOption[] = [];
+          snapshot.forEach((docSnap) => {
+            loaded.push(docSnap.data() as StickerPackageOption);
+          });
+          loaded.sort((a, b) => (a.sortOrder || 1) - (b.sortOrder || 1));
+          if (loaded.length === 3) {
+            setPackages(loaded);
+          }
+        }
+      },
+      () => {
+        // Fallback to DEFAULT_STICKER_PACKAGES
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // 3. Inspect URL parameters on boot for direct NFC Tag Scan (?tag=msm-xxxx&p=...)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tagParam = params.get('tag');
@@ -159,7 +198,7 @@ export function BikerSafeApp() {
     }
   }, []);
 
-  // 3. Fetch public sticker from Firestore whenever landingTagId is active (works without login!)
+  // 4. Fetch public sticker from Firestore whenever landingTagId is active
   useEffect(() => {
     const cleanId = landingTagId.trim();
     if (cleanId.length < 4) return;
@@ -178,7 +217,7 @@ export function BikerSafeApp() {
           });
         }
       } catch {
-        // Fallback packet in URL will still display if offline or restricted
+        // Fallback packet in URL will still display if offline
       } finally {
         if (!cancelled) {
           setLoadingLandingSticker(false);
@@ -192,7 +231,7 @@ export function BikerSafeApp() {
     };
   }, [landingTagId]);
 
-  // 4. Subscribe to the authenticated user's profile in Firestore so they can modify their data anytime
+  // 5. Subscribe to the authenticated user's profile in Firestore
   useEffect(() => {
     if (!authReady || !user) return;
 
@@ -243,6 +282,37 @@ export function BikerSafeApp() {
     return () => unsubscribe();
   }, [authReady, user, hasPopulatedInitialForm]);
 
+  // 6. Subscribe to all active stickers when Authorized Personnel is logged into Admin Panel
+  useEffect(() => {
+    if (!authReady || !user || !adminAuthenticated) return;
+
+    const allStickersQuery = query(
+      collection(db, 'stickers'),
+      where('isActive', '==', true)
+    );
+
+    const unsubscribe = onSnapshot(
+      allStickersQuery,
+      (snapshot) => {
+        const all: EmergencyStickerRecord[] = [];
+        snapshot.forEach((docSnap) => {
+          const raw = docSnap.data() as EmergencyStickerRecord;
+          all.push({
+            ...raw,
+            secondaryContactName: raw.secondaryContactName || '',
+            secondaryContactPhone: raw.secondaryContactPhone || '',
+          });
+        });
+        setAdminAllStickers(all);
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'stickers');
+      }
+    );
+
+    return () => unsubscribe();
+  }, [authReady, user, adminAuthenticated]);
+
   const handleGoogleSignIn = async () => {
     setFormError(null);
     try {
@@ -253,6 +323,33 @@ export function BikerSafeApp() {
           ? `Error al iniciar sesión: ${err.message}`
           : 'No se pudo completar la autenticación.'
       );
+    }
+  };
+
+  const handleSavePackagesFromAdmin = async (
+    updatedPackages: StickerPackageOption[]
+  ) => {
+    for (let i = 0; i < updatedPackages.length; i++) {
+      const pkg = updatedPackages[i];
+      const cleanName = pkg.name.trim().slice(0, 80);
+      const cleanSubtitle = pkg.subtitle.trim().slice(0, 80);
+      const cleanPrice = Math.max(1, Math.min(100000, Number(pkg.price) || 249));
+      const cleanSpecs = pkg.specs.trim().slice(0, 250);
+      const path = `packages/${pkg.pkgId}`;
+
+      try {
+        await setDoc(doc(db, 'packages', pkg.pkgId), {
+          pkgId: pkg.pkgId,
+          name: cleanName.length >= 2 ? cleanName : pkg.name,
+          subtitle: cleanSubtitle.length >= 1 ? cleanSubtitle : pkg.subtitle,
+          price: cleanPrice,
+          specs: cleanSpecs.length >= 2 ? cleanSpecs : pkg.specs,
+          sortOrder: i + 1,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, path);
+      }
     }
   };
 
@@ -434,20 +531,51 @@ export function BikerSafeApp() {
           <PublicEmergencyLandingPage
             sticker={landingSticker || userSticker}
             loading={loadingLandingSticker}
-            isOwnerViewing={Boolean(
-              user &&
-                (landingSticker?.ownerId === user.uid ||
-                  userSticker?.ownerId === user.uid)
-            )}
+            isAdminPreview={adminAuthenticated}
             onBackToMainScreen={() => {
+              setViewMode('main');
+            }}
+            onBackToAdmin={() => {
+              setViewMode('admin_panel');
+            }}
+          />
+        ) : viewMode === 'admin_login' ? (
+          <AdminLoginView
+            ensureFirebaseSignedIn={async () => {
+              if (user) return true;
+              try {
+                await signInWithGoogle();
+                return true;
+              } catch {
+                return false;
+              }
+            }}
+            onLoginSuccess={() => {
+              setAdminAuthenticated(true);
+              setViewMode('admin_panel');
+            }}
+            onCancel={() => setViewMode('main')}
+          />
+        ) : viewMode === 'admin_panel' && adminAuthenticated ? (
+          <AdminDashboardView
+            stickers={adminAllStickers}
+            packages={packages}
+            onSavePackages={handleSavePackagesFromAdmin}
+            onPreviewStickerLanding={(targetSticker) => {
+              setLandingSticker(targetSticker);
+              setLandingTagId(targetSticker.tagId);
+              setViewMode('public_landing');
+            }}
+            onExitAdmin={() => {
+              setAdminAuthenticated(false);
               setViewMode('main');
             }}
           />
         ) : (
           <div className="space-y-8">
-            {/* Step Progress & Mode Switcher inside Pantalla Principal */}
+            {/* Step Progress & Mode Switcher inside Pantalla Principal (No URL exposed to customer) */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#14161A] border border-zinc-800 rounded-xl p-4">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={() => setMainStep('profile_form')}
@@ -477,31 +605,12 @@ export function BikerSafeApp() {
                   2. Compra de Sticker NFC Personalizado
                 </button>
               </div>
-
-              {userSticker && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLandingSticker(userSticker);
-                    setLandingTagId(userSticker.tagId);
-                    setViewMode('public_landing');
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-orange-400 text-xs font-bold rounded-lg transition-colors cursor-pointer self-start sm:self-auto"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Ver mi Landing Page NFC ({userSticker.tagId})</span>
-                </button>
-              )}
             </div>
 
             {mainStep === 'sticker_checkout' && userSticker ? (
               <StickerPurchaseSection
                 sticker={userSticker}
-                onOpenPublicLanding={() => {
-                  setLandingSticker(userSticker);
-                  setLandingTagId(userSticker.tagId);
-                  setViewMode('public_landing');
-                }}
+                packages={packages}
                 onEditProfile={() => setMainStep('profile_form')}
               />
             ) : (
@@ -534,7 +643,7 @@ export function BikerSafeApp() {
                 </div>
 
                 <p className="text-sm text-zinc-400 leading-relaxed mb-7">
-                  Tu cuenta protege la edición de estos datos. Puedes modificarlos cuando lo necesites y al escanear tu sticker NFC se desplegará tu Landing Page de emergencia de forma inmediata y sin pedir claves de acceso.
+                  Tu cuenta protege la edición de estos datos. Puedes modificarlos cuando lo necesites y una vez guardado tu registro pasarás a la selección y compra de tu sticker NFC personalizado.
                 </p>
 
                 {!user && (
@@ -567,7 +676,7 @@ export function BikerSafeApp() {
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-orange-500 shrink-0" />
                       <span>
-                        Tus datos médicos se han guardado y vinculado a tu tag NFC (
+                        Tus datos médicos se han guardado correctamente en tu perfil (
                         <strong className="font-mono text-orange-400">
                           {currentTagId}
                         </strong>
@@ -761,7 +870,7 @@ export function BikerSafeApp() {
                     </div>
                   </div>
 
-                  {/* Optional Extended Identification Parameters (No PINs / No Passwords) */}
+                  {/* Optional Extended Identification Parameters */}
                   <div className="pt-2">
                     <button
                       type="button"
@@ -848,22 +957,40 @@ export function BikerSafeApp() {
         )}
       </main>
 
-      {/* Quiet Footer */}
+      {/* Footer with requested slogan "Stickers de emergencia NFC" and "Personal autorizado" link */}
       <footer className="border-t border-zinc-800/80 bg-[#08090B] py-5 px-4 sm:px-8 mt-auto">
-        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
-          <span>
-            Biker Safe · Perfil Médico de Emergencia y Stickers NFC Personalizados
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-400">
+          <span className="font-semibold text-zinc-300">
+            Stickers de emergencia NFC
           </span>
-          <button
-            type="button"
-            onClick={() => {
-              setViewMode('main');
-              setMainStep('profile_form');
-            }}
-            className="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer"
-          >
-            Pantalla Principal
-          </button>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('main');
+                setMainStep('profile_form');
+              }}
+              className="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer"
+            >
+              Pantalla Principal
+            </button>
+            <span aria-hidden="true" className="text-zinc-700">
+              ·
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (adminAuthenticated) {
+                  setViewMode('admin_panel');
+                } else {
+                  setViewMode('admin_login');
+                }
+              }}
+              className="text-zinc-500 hover:text-orange-400 transition-colors cursor-pointer"
+            >
+              Personal autorizado
+            </button>
+          </div>
         </div>
       </footer>
     </div>

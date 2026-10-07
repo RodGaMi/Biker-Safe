@@ -162,6 +162,43 @@ export interface ScanLogRecord {
   createdAt?: Timestamp | null;
 }
 
+export interface StickerPackageOption {
+  pkgId: string;
+  name: string;
+  subtitle: string;
+  price: number;
+  specs: string;
+  sortOrder: number;
+  updatedAt?: Timestamp | null;
+}
+
+export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
+  {
+    pkgId: 'single',
+    name: 'Kit Individual Casco NFC',
+    subtitle: 'Para 1 casco principal',
+    price: 249,
+    specs: '1 Sticker NFC NTAG213 · Acabado Carbono + Naranja · Resina 3M IP68',
+    sortOrder: 1,
+  },
+  {
+    pkgId: 'pro',
+    name: 'Kit Biker Safe Pro',
+    subtitle: 'Más elegido · Casco + Moto',
+    price: 399,
+    specs: '2 Stickers NFC para Casco + 1 Sticker NFC Reflejante para Chasis',
+    sortOrder: 2,
+  },
+  {
+    pkgId: 'squad',
+    name: 'Kit Dúo / Rodada',
+    subtitle: 'Cobertura en múltiples cascos',
+    price: 649,
+    specs: '4 Stickers NFC NTAG215 Programados con tu URL única de emergencia',
+    sortOrder: 3,
+  },
+];
+
 export function generateUniqueTagId(): string {
   const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
   let token = 'msm-';

@@ -108,27 +108,30 @@ const SCHEMA_CONSTRAINTS = {
   insuranceDetails: { minLength: 0, maxLength: 150 },
 };
 
-const STICKER_PACKAGES = [
+const DEFAULT_STICKER_PACKAGES = [
   {
-    id: 'single',
+    pkgId: 'single',
     name: 'Kit Individual Casco NFC',
     subtitle: 'Para 1 casco principal',
     price: 249,
     specs: '1 Sticker NFC NTAG213 · Acabado Carbono + Naranja · Resina 3M IP68',
+    sortOrder: 1,
   },
   {
-    id: 'pro',
+    pkgId: 'pro',
     name: 'Kit Biker Safe Pro',
     subtitle: 'Más elegido · Casco + Moto',
     price: 399,
     specs: '2 Stickers NFC para Casco + 1 Sticker NFC Reflejante para Chasis',
+    sortOrder: 2,
   },
   {
-    id: 'squad',
+    pkgId: 'squad',
     name: 'Kit Dúo / Rodada',
     subtitle: 'Cobertura en múltiples cascos',
     price: 649,
     specs: '4 Stickers NFC NTAG215 Programados con tu URL única de emergencia',
+    sortOrder: 3,
   },
 ];
 
@@ -291,7 +294,6 @@ function parseEncodedStickerPacket(encoded) {
   }
 }
 
-// Deterministic SVG QR Matrix Renderer (Works 100% offline/hermetic without external image hosts)
 function renderDeterministicQrSvg(text, size = 92) {
   const grid = 21;
   let hash = 2166136261;
@@ -335,19 +337,19 @@ function renderDeterministicQrSvg(text, size = 92) {
     }
   }
 
-  return `<svg width="${size}" height="${size}" viewBox="0 0 ${grid} ${grid}" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-label="Código QR de Emergencia NFC">${rects}</svg>`;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${grid} ${grid}" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" aria-label="Código QR de Sticker NFC">${rects}</svg>`;
 }
 
 // ============================================================================
-// 3. Application State & Reactive Renderer
+// 3. Application State
 // ============================================================================
 const state = {
   user: null,
   authReady: false,
-  viewMode: 'main', // 'main' | 'public_landing'
+  viewMode: 'main', // 'main' | 'public_landing' | 'admin_login' | 'admin_panel'
   mainStep: 'profile_form', // 'profile_form' | 'sticker_checkout'
 
-  // Form fields
+  // Customer Form fields
   currentTagId: null,
   fullName: '',
   bloodType: '',
@@ -366,8 +368,10 @@ const state = {
   submitting: false,
   formError: null,
   saveSuccessBanner: false,
-  copiedUrl: false,
-  nfcWriteMessage: null,
+
+  // Dynamic Sticker Packages (Editable by Admin)
+  packages: DEFAULT_STICKER_PACKAGES.map((p) => ({ ...p })),
+  packagesLoadedFromDb: false,
 
   // Checkout state
   selectedPkgId: 'pro',
@@ -377,15 +381,31 @@ const state = {
   orderCompleted: false,
   orderFolio: '',
 
-  // Firestore records
+  // Firestore records for current user & public landing
   userSticker: null,
   hasPopulatedInitialForm: false,
   landingTagId: '',
   landingSticker: null,
   loadingLandingSticker: false,
+
+  // Internal Admin State
+  adminAuthenticated: false,
+  adminUsernameInput: '',
+  adminPasswordInput: '',
+  adminLoginError: null,
+  adminTab: 'records', // 'records' | 'packages'
+  adminAllStickers: [],
+  adminSearchQuery: '',
+  adminCopiedTagId: null,
+  adminNfcMessage: null,
+  adminSavingPackages: false,
+  adminPackagesSavedSuccess: false,
+  adminPackagesError: null,
 };
 
 let unsubscribeUserStickers = null;
+let unsubscribeAllStickersAdmin = null;
+let unsubscribePackages = null;
 
 async function syncUserPrivateProfile(user) {
   if (!user || !user.emailVerified) return;
@@ -413,17 +433,80 @@ async function handleGoogleSignIn() {
   try {
     const result = await signInWithPopup(auth, googleProvider);
     await syncUserPrivateProfile(result.user);
+    return result.user;
   } catch (err) {
     state.formError =
       err instanceof Error
         ? `Error al iniciar sesión: ${err.message}`
         : 'No se pudo completar la autenticación.';
     renderApp();
+    return null;
   }
 }
 
 async function handleSignOut() {
+  state.adminAuthenticated = false;
+  if (unsubscribeAllStickersAdmin) {
+    unsubscribeAllStickersAdmin();
+    unsubscribeAllStickersAdmin = null;
+  }
   await firebaseSignOut(auth);
+}
+
+// Subscribe to the 3 customizable purchase packages in Firestore
+function subscribeToPackages() {
+  if (unsubscribePackages) return;
+  const pkgQuery = query(collection(db, 'packages'), where('sortOrder', '>=', 1));
+  unsubscribePackages = onSnapshot(
+    pkgQuery,
+    (snapshot) => {
+      if (!snapshot.empty) {
+        const loaded = [];
+        snapshot.forEach((docSnap) => {
+          loaded.push(docSnap.data());
+        });
+        loaded.sort((a, b) => (a.sortOrder || 1) - (b.sortOrder || 1));
+        if (loaded.length === 3) {
+          state.packages = loaded;
+          state.packagesLoadedFromDb = true;
+          renderApp();
+        }
+      }
+    },
+    () => {
+      // Fallback to default packages if not yet initialized
+    }
+  );
+}
+
+// Subscribe to ALL stickers for the Internal Admin Panel
+function subscribeToAllStickersForAdmin() {
+  if (unsubscribeAllStickersAdmin) {
+    unsubscribeAllStickersAdmin();
+    unsubscribeAllStickersAdmin = null;
+  }
+  if (!state.user) return;
+
+  const allStickersQuery = query(collection(db, 'stickers'), where('isActive', '==', true));
+  unsubscribeAllStickersAdmin = onSnapshot(
+    allStickersQuery,
+    (snapshot) => {
+      const all = [];
+      snapshot.forEach((docSnap) => {
+        const raw = docSnap.data();
+        all.push({
+          ...raw,
+          secondaryContactName: raw.secondaryContactName || '',
+          secondaryContactPhone: raw.secondaryContactPhone || '',
+        });
+      });
+      state.adminAllStickers = all;
+      renderApp();
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'stickers');
+    }
+  );
 }
 
 async function fetchPublicSticker(tagId) {
@@ -501,7 +584,7 @@ function subscribeToUserSticker(user) {
 }
 
 // ============================================================================
-// 4. HTML Templates & Event Binding
+// 4. HTML Templates
 // ============================================================================
 function renderHeader() {
   return `
@@ -583,37 +666,27 @@ function renderPublicLandingView() {
     `;
   }
 
-  const isOwnerViewing = Boolean(
-    state.user &&
-      (sticker.ownerId === state.user.uid || state.userSticker?.ownerId === state.user.uid)
-  );
-
   return `
     <div class="max-w-4xl mx-auto space-y-6">
-      <!-- Top Action Bar -->
-      <div class="flex flex-wrap items-center justify-between gap-3 bg-[#14161A] border border-zinc-800 rounded-xl px-5 py-3.5">
-        <div class="flex items-center gap-2 text-xs text-zinc-400">
-          <span class="w-2 h-2 rounded-full bg-orange-500"></span>
-          <span class="font-semibold text-zinc-200">LANDING PAGE DE EMERGENCIA NFC</span>
-          <span aria-hidden="true">·</span>
-          <span class="font-mono tabular-nums text-orange-400">${escapeHtml(sticker.tagId)}</span>
-        </div>
-
-        <div class="flex items-center gap-2.5">
-          <button type="button" id="copy-landing-url-btn" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer">
-            <span>${state.copiedUrl ? '¡URL Copiada!' : 'Copiar URL del Tag'}</span>
-          </button>
-
-          <button type="button" id="back-to-main-btn" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer">
-            <span>${isOwnerViewing ? 'Editar mis Datos / Comprar Sticker' : 'Pantalla Principal'}</span>
+      ${
+        state.adminAuthenticated
+          ? `
+        <div class="flex items-center justify-between gap-3 bg-[#14161A] border border-orange-500/50 rounded-xl px-5 py-3">
+          <span class="text-xs font-semibold text-orange-400">
+            Vista Previa de Administrador · ID: ${escapeHtml(sticker.tagId)}
+          </span>
+          <button type="button" id="back-to-admin-btn" class="px-3.5 py-1.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer">
+            ← Volver al Panel de Administración
           </button>
         </div>
-      </div>
+      `
+          : ''
+      }
 
       <!-- Hero Emergency Identification Banner -->
       <section class="bg-gradient-to-br from-[#181B20] via-[#121418] to-[#0B0C0E] border border-zinc-800 rounded-2xl overflow-hidden">
         <div class="bg-orange-500 text-black px-6 py-2.5 flex items-center justify-between text-xs font-bold tracking-wide">
-          <span>INFORMACIÓN MÉDICA CRÍTICA DE EMERGENCIA · ACCESO DIRECTO NFC SIN CLAVE</span>
+          <span>INFORMACIÓN MÉDICA CRÍTICA DE EMERGENCIA · ACCESO DIRECTO NFC</span>
           <span class="font-mono tabular-nums hidden sm:inline">BIKER SAFE ID: ${escapeHtml(sticker.tagId)}</span>
         </div>
 
@@ -668,7 +741,7 @@ function renderPublicLandingView() {
           <div>
             <h2 class="text-lg font-bold text-white">Contactos de Emergencia Directos</h2>
             <p class="text-xs text-zinc-400 mt-0.5">
-              Toca cualquier botón para realizar la llamada telefónica inmediata sin claves ni bloqueos.
+              Toca cualquier botón para realizar la llamada telefónica inmediata.
             </p>
           </div>
           <a href="tel:911" class="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap">
@@ -722,13 +795,13 @@ function renderPublicLandingView() {
   `;
 }
 
+// Step 2: Customer Sticker Purchase (NO URL shown to the customer!)
 function renderStickerCheckoutStep() {
   const sticker = state.userSticker;
   if (!sticker) return '';
 
-  const uniqueUrl = buildUniqueStickerUrl(sticker);
   const selectedPkg =
-    STICKER_PACKAGES.find((p) => p.id === state.selectedPkgId) || STICKER_PACKAGES[1];
+    state.packages.find((p) => p.pkgId === state.selectedPkgId) || state.packages[1] || state.packages[0];
 
   return `
     <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-8">
@@ -738,29 +811,26 @@ function renderStickerCheckoutStep() {
           <div class="flex items-center gap-2 text-xs font-bold text-orange-500 mb-1">
             <span>PASO 2 · STICKER FÍSICO PERSONALIZADO</span>
             <span aria-hidden="true">·</span>
-            <span class="font-mono tabular-nums">${escapeHtml(sticker.tagId)}</span>
+            <span class="font-mono tabular-nums">FOLIO PERFIL: ${escapeHtml(sticker.tagId)}</span>
           </div>
           <h2 class="text-2xl font-bold text-white tracking-tight">
             Adquiere tu Sticker NFC Biker Safe
           </h2>
           <p class="text-sm text-zinc-400 mt-1">
-            Tu sticker se envía pre-programado con tu URL única de emergencia. Al escanearlo sin claves ni contraseñas, despliega tu Landing Page médica.
+            Nosotros programamos y vinculamos tu sticker físico con tu perfil médico antes de enviarlo a tu domicilio.
           </p>
         </div>
 
         <div class="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button type="button" id="open-public-landing-btn" class="inline-flex items-center gap-2 px-4 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-xl transition-colors cursor-pointer whitespace-nowrap">
-            <span>Ver mi Landing Page de Emergencia</span>
-          </button>
-          <button type="button" id="go-edit-profile-btn" class="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-xl transition-colors cursor-pointer whitespace-nowrap">
-            <span>Modificar mis Datos</span>
+          <button type="button" id="go-edit-profile-btn" class="inline-flex items-center gap-1.5 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-xl transition-colors cursor-pointer whitespace-nowrap">
+            <span>← Modificar mis Datos Médicos</span>
           </button>
         </div>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        <!-- Left: Physical Custom Helmet Sticker Preview & Unique URL (5 cols) -->
-        <div class="lg:col-span-5 space-y-5">
+        <!-- Left: Physical Custom Helmet Sticker Preview ONLY (No URL shown to customer) (5 cols) -->
+        <div class="lg:col-span-5 space-y-4">
           <div class="bg-[#0B0C0E] border-2 border-orange-500/80 rounded-2xl p-6 space-y-5">
             <div class="flex items-center justify-between border-b border-zinc-800 pb-3">
               <div class="flex items-center gap-2">
@@ -772,45 +842,34 @@ function renderStickerCheckoutStep() {
 
             <div class="flex items-center gap-4">
               <div class="bg-white p-2.5 rounded-xl shrink-0">
-                ${renderDeterministicQrSvg(uniqueUrl, 92)}
+                ${renderDeterministicQrSvg(sticker.tagId, 92)}
               </div>
               <div class="space-y-1 min-w-0">
-                <div class="text-[11px] font-bold text-orange-500">ESCANEO DE EMERGENCIA</div>
+                <div class="text-[11px] font-bold text-orange-500">STICKER DE EMERGENCIA</div>
                 <div class="text-base font-bold text-white truncate">${escapeHtml(sticker.fullName)}</div>
                 <div class="text-xs font-mono tabular-nums text-zinc-300">
                   Tipo de Sangre: <strong class="text-orange-400">${escapeHtml(sticker.bloodType)}</strong>
                 </div>
                 <div class="text-[11px] text-zinc-400 truncate">
-                  Contacto: ${escapeHtml(sticker.emergencyContactName)}
+                  Contacto 1: ${escapeHtml(sticker.emergencyContactName)}
                 </div>
+                ${
+                  sticker.secondaryContactName
+                    ? `<div class="text-[11px] text-zinc-400 truncate">Contacto 2: ${escapeHtml(sticker.secondaryContactName)}</div>`
+                    : ''
+                }
               </div>
             </div>
 
             <div class="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-400">
-              <span>Chip NTAG213 · Resina 3M</span>
-              <span>Acceso directo sin clave</span>
+              <span>Chip NTAG213 · Resina Epóxica 3M</span>
+              <span>Listo para colocar en casco</span>
             </div>
           </div>
 
-          <!-- Unique URL Box -->
-          <div class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-4 space-y-2.5">
-            <div class="text-xs font-semibold text-zinc-300">URL Única vinculada a tu Sticker NFC:</div>
-            <div class="flex items-center gap-2">
-              <input type="text" readonly value="${escapeHtml(uniqueUrl)}" class="w-full px-3 py-2 text-xs font-mono bg-[#14161A] border border-zinc-800 rounded-lg text-zinc-300 select-all" />
-              <button type="button" id="copy-checkout-url-btn" class="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 shrink-0 cursor-pointer">
-                <span>${state.copiedUrl ? 'Copiada' : 'Copiar'}</span>
-              </button>
-            </div>
-
-            <button type="button" id="write-web-nfc-btn" class="w-full py-2 px-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-xs font-medium rounded-lg inline-flex items-center justify-center gap-2 transition-colors cursor-pointer">
-              <span>¿Ya tienes un tag virgen? Grabar por Web NFC</span>
-            </button>
-
-            ${
-              state.nfcWriteMessage
-                ? `<p class="text-xs text-orange-400 pt-1">${escapeHtml(state.nfcWriteMessage)}</p>`
-                : ''
-            }
+          <div class="p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl text-xs text-zinc-400 leading-relaxed">
+            <strong class="text-zinc-200 block mb-1">Configuración Certificada Biker Safe</strong>
+            Nuestro equipo técnico graba tu perfil médico directamente en el chip NFC de tu sticker antes del envío. Si actualizas tus datos en el Paso 1, tu sticker mostrará la información actualizada automáticamente.
           </div>
         </div>
 
@@ -826,21 +885,18 @@ function renderStickerCheckoutStep() {
               </div>
 
               <p class="text-sm text-zinc-300 leading-relaxed">
-                Hemos vinculado el chip NFC de tu <strong>${escapeHtml(selectedPkg.name)}</strong> directamente a tu perfil médico (<span class="font-mono text-orange-400">${escapeHtml(sticker.tagId)}</span>). Cualquier cambio que realices en tus datos médicos desde la pantalla principal se actualizará automáticamente al escanear tu casco.
+                Hemos recibido tu pedido de <strong>${escapeHtml(selectedPkg.name)}</strong> vinculado al registro médico de <strong>${escapeHtml(sticker.fullName)}</strong>. Nuestro personal autorizado configurará tu tag NFC y lo enviará a tu domicilio.
               </p>
 
               <div class="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1 text-xs text-zinc-300">
                 <div><strong class="text-white">Paquete:</strong> ${escapeHtml(selectedPkg.name)} ($${selectedPkg.price} MXN)</div>
-                <div><strong class="text-white">Destinatario:</strong> ${escapeHtml(sticker.fullName)}</div>
+                <div><strong class="text-white">Titular del Perfil:</strong> ${escapeHtml(sticker.fullName)} (${escapeHtml(sticker.bloodType)})</div>
                 <div><strong class="text-white">Dirección de envío:</strong> ${escapeHtml(state.shippingAddress)}, ${escapeHtml(state.shippingCity)} C.P. ${escapeHtml(state.shippingZip)}</div>
               </div>
 
               <div class="flex flex-wrap items-center gap-3 pt-2">
-                <button type="button" id="open-public-landing-after-order-btn" class="px-5 py-3 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl inline-flex items-center gap-2 transition-colors cursor-pointer">
-                  <span>Abrir mi Landing Page de Emergencia</span>
-                </button>
-                <button type="button" id="new-order-btn" class="px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-xl transition-colors cursor-pointer">
-                  Hacer otro pedido
+                <button type="button" id="new-order-btn" class="px-5 py-3 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-xl transition-colors cursor-pointer">
+                  Realizar otro pedido
                 </button>
               </div>
             </div>
@@ -849,19 +905,20 @@ function renderStickerCheckoutStep() {
             <form id="sticker-purchase-form" class="space-y-5">
               <div>
                 <label class="block text-xs font-bold text-zinc-300 mb-3">
-                  1. Selecciona tu Kit de Stickers NFC Personalizados
+                  1. Selecciona tu Opción de Compra de Tag NFC
                 </label>
                 <div class="grid grid-cols-1 gap-3">
-                  ${STICKER_PACKAGES.map((pkg) => {
-                    const active = pkg.id === state.selectedPkgId;
-                    return `
-                      <div data-pkg-id="${pkg.id}" class="pkg-option-card p-4 rounded-xl border transition-colors cursor-pointer flex items-center justify-between gap-4 ${
+                  ${state.packages
+                    .map((pkg) => {
+                      const active = pkg.pkgId === state.selectedPkgId;
+                      return `
+                      <div data-pkg-id="${escapeHtml(pkg.pkgId)}" class="pkg-option-card p-4 rounded-xl border transition-colors cursor-pointer flex items-center justify-between gap-4 ${
                         active
                           ? 'bg-[#0B0C0E] border-orange-500'
                           : 'bg-[#0B0C0E]/60 border-zinc-800 hover:border-zinc-700'
                       }">
                         <div class="space-y-0.5">
-                          <div class="flex items-center gap-2">
+                          <div class="flex items-center gap-2 flex-wrap">
                             <span class="text-sm font-bold text-white">${escapeHtml(pkg.name)}</span>
                             <span class="text-xs text-orange-400 font-medium">· ${escapeHtml(pkg.subtitle)}</span>
                           </div>
@@ -873,7 +930,8 @@ function renderStickerCheckoutStep() {
                         </div>
                       </div>
                     `;
-                  }).join('')}
+                    })
+                    .join('')}
                 </div>
               </div>
 
@@ -934,7 +992,7 @@ function renderProfileFormStep() {
       </div>
 
       <p class="text-sm text-zinc-400 leading-relaxed mb-7">
-        Tu cuenta protege la edición de estos datos. Puedes modificarlos cuando lo necesites y al escanear tu sticker NFC se desplegará tu Landing Page de emergencia de forma inmediata y sin pedir claves de acceso.
+        Tu cuenta protege la edición de estos datos. Puedes modificarlos cuando lo necesites y una vez guardado tu registro pasarás a la selección y compra de tu sticker NFC personalizado.
       </p>
 
       ${
@@ -967,7 +1025,7 @@ function renderProfileFormStep() {
         state.saveSuccessBanner
           ? `
         <div class="mb-6 p-4 bg-zinc-900 border border-orange-500/60 rounded-xl text-xs text-zinc-200">
-          Tus datos médicos se han guardado y vinculado a tu tag NFC (<strong class="font-mono text-orange-400">${escapeHtml(state.currentTagId)}</strong>).
+          Tus datos médicos se han guardado correctamente en tu perfil (<strong class="font-mono text-orange-400">${escapeHtml(state.currentTagId)}</strong>).
         </div>
       `
           : ''
@@ -1087,6 +1145,401 @@ function renderProfileFormStep() {
   `;
 }
 
+// ============================================================================
+// 5. Internal Admin Login & Admin Panel Views ("Personal autorizado")
+// ============================================================================
+function renderAdminLoginView() {
+  return `
+    <div class="max-w-md mx-auto my-8 bg-[#14161A] border border-zinc-800 rounded-2xl p-8 space-y-6">
+      <div class="space-y-1.5">
+        <div class="text-xs font-bold text-orange-500 tracking-wide">
+          ACCESO RESTRINGIDO · PERSONAL AUTORIZADO
+        </div>
+        <h1 class="text-2xl font-bold text-white">
+          Administración Interna Biker Safe
+        </h1>
+        <p class="text-xs text-zinc-400 leading-relaxed">
+          Ingresa tus credenciales de personal autorizado para consultar todos los registros, obtener las URLs de programación de tags NFC y editar los paquetes de venta.
+        </p>
+      </div>
+
+      ${
+        state.adminLoginError
+          ? `
+        <div class="p-3.5 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+          ${escapeHtml(state.adminLoginError)}
+        </div>
+      `
+          : ''
+      }
+
+      <form id="admin-login-form" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+            Usuario o Correo Autorizado
+          </label>
+          <input
+            type="text"
+            id="admin-username-input"
+            required
+            value="${escapeHtml(state.adminUsernameInput)}"
+            placeholder="admin o correo autorizado"
+            class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+          />
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+            Contraseña de Administración Interna
+          </label>
+          <input
+            type="password"
+            id="admin-password-input"
+            required
+            value="${escapeHtml(state.adminPasswordInput)}"
+            placeholder="••••••••••••"
+            class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+          />
+          <span class="block text-[11px] text-zinc-500 mt-1.5 font-mono">
+            Credencial interna por defecto: admin / bikersafe2026
+          </span>
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-3 px-5 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+        >
+          Ingresar al Panel de Administración
+        </button>
+      </form>
+
+      <div class="pt-3 border-t border-zinc-800 flex items-center justify-between text-xs">
+        <button type="button" id="admin-back-main-btn" class="text-zinc-400 hover:text-white cursor-pointer">
+          ← Volver a Pantalla Principal
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function renderAdminPanelView() {
+  const q = state.adminSearchQuery.trim().toLowerCase();
+  const filteredStickers = state.adminAllStickers.filter((s) => {
+    if (!q) return true;
+    return (
+      String(s.fullName || '').toLowerCase().includes(q) ||
+      String(s.tagId || '').toLowerCase().includes(q) ||
+      String(s.bloodType || '').toLowerCase().includes(q) ||
+      String(s.emergencyContactName || '').toLowerCase().includes(q)
+    );
+  });
+
+  return `
+    <div class="space-y-8">
+      <!-- Admin Top Header -->
+      <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-2 text-xs font-bold text-orange-500 mb-1">
+            <span>PANEL INTERNO · PERSONAL AUTORIZADO</span>
+            <span aria-hidden="true">·</span>
+            <span class="font-mono tabular-nums">${state.adminAllStickers.length} registros totales</span>
+          </div>
+          <h1 class="text-2xl font-bold text-white">
+            Administración de Registros NFC y Opciones de Compra
+          </h1>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            id="admin-tab-records-btn"
+            class="px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+              state.adminTab === 'records'
+                ? 'bg-orange-500 text-black'
+                : 'bg-zinc-800 text-zinc-300 hover:text-white'
+            }"
+          >
+            1. Registros y URLs para Tags NFC (${state.adminAllStickers.length})
+          </button>
+
+          <button
+            type="button"
+            id="admin-tab-packages-btn"
+            class="px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+              state.adminTab === 'packages'
+                ? 'bg-orange-500 text-black'
+                : 'bg-zinc-800 text-zinc-300 hover:text-white'
+            }"
+          >
+            2. Editar las 3 Opciones de Compra
+          </button>
+
+          <button
+            type="button"
+            id="admin-exit-btn"
+            class="px-3.5 py-2 rounded-lg text-xs font-semibold bg-zinc-900 border border-zinc-700 text-zinc-300 hover:text-white cursor-pointer"
+          >
+            Salir de Administración
+          </button>
+        </div>
+      </div>
+
+      ${
+        state.adminTab === 'packages'
+          ? `
+        <!-- Section B: Edit the 3 Purchase Options -->
+        <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6">
+          <div class="border-b border-zinc-800 pb-4">
+            <h2 class="text-xl font-bold text-white">
+              Configuración de las 3 Opciones de Compra de Tags NFC
+            </h2>
+            <p class="text-xs text-zinc-400 mt-1">
+              Modifica el título, subtítulo, precio y descripción de los 3 paquetes que ven los clientes en el Paso 2.
+            </p>
+          </div>
+
+          ${
+            state.adminPackagesSavedSuccess
+              ? `
+            <div class="p-4 bg-zinc-900 border border-orange-500 rounded-xl text-xs text-orange-400 font-semibold">
+              ¡Las 3 opciones de compra se han actualizado correctamente y ya están visibles para los clientes!
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            state.adminPackagesError
+              ? `
+            <div class="p-4 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+              ${escapeHtml(state.adminPackagesError)}
+            </div>
+          `
+              : ''
+          }
+
+          <form id="admin-packages-form" class="space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              ${state.packages
+                .map(
+                  (pkg, idx) => `
+                <div class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-4">
+                  <div class="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+                    <span class="text-xs font-bold text-orange-500">
+                      OPCIÓN ${idx + 1} (${escapeHtml(pkg.pkgId.toUpperCase())})
+                    </span>
+                    <span class="text-xs font-mono text-zinc-500">#${idx + 1}</span>
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">
+                      Nombre del Paquete
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      maxlength="80"
+                      id="pkg-name-${idx}"
+                      value="${escapeHtml(pkg.name)}"
+                      class="w-full px-3.5 py-2 text-xs bg-[#14161A] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">
+                      Subtítulo / Etiqueta
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      maxlength="80"
+                      id="pkg-subtitle-${idx}"
+                      value="${escapeHtml(pkg.subtitle)}"
+                      class="w-full px-3.5 py-2 text-xs bg-[#14161A] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">
+                      Precio ($ MXN)
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      max="100000"
+                      id="pkg-price-${idx}"
+                      value="${Number(pkg.price)}"
+                      class="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-[#14161A] border border-zinc-800 rounded-lg text-orange-400 font-bold focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1">
+                      Especificaciones / Descripción
+                    </label>
+                    <textarea
+                      rows="3"
+                      required
+                      maxlength="250"
+                      id="pkg-specs-${idx}"
+                      class="w-full px-3.5 py-2 text-xs bg-[#14161A] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500 resize-y"
+                    >${escapeHtml(pkg.specs)}</textarea>
+                  </div>
+                </div>
+              `
+                )
+                .join('')}
+            </div>
+
+            <div class="flex justify-end pt-2">
+              <button
+                type="submit"
+                ${state.adminSavingPackages ? 'disabled' : ''}
+                class="px-7 py-3 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                ${
+                  state.adminSavingPackages
+                    ? 'Guardando Opciones...'
+                    : 'Guardar Cambios en las 3 Opciones de Compra'
+                }
+              </button>
+            </div>
+          </form>
+        </div>
+      `
+          : `
+        <!-- Section A: All Registered Records & NFC Tag Configuration URLs -->
+        <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800 pb-4">
+            <div>
+              <h2 class="text-lg font-bold text-white">
+                Directorio de Registros y URLs para Programación de Tags NFC
+              </h2>
+              <p class="text-xs text-zinc-400 mt-0.5">
+                Copia la URL única de cada cliente o grábala directamente en el sticker NFC físico antes de enviarlo.
+              </p>
+            </div>
+
+            <input
+              type="text"
+              id="admin-search-input"
+              value="${escapeHtml(state.adminSearchQuery)}"
+              placeholder="Buscar por nombre, ID de tag o tipo de sangre..."
+              class="w-full sm:w-80 px-4 py-2 text-xs bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-500 focus:outline-none focus:border-orange-500"
+            />
+          </div>
+
+          ${
+            state.adminNfcMessage
+              ? `
+            <div class="p-3.5 bg-zinc-900 border border-orange-500/70 rounded-xl text-xs text-orange-400">
+              ${escapeHtml(state.adminNfcMessage)}
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            filteredStickers.length === 0
+              ? `
+            <div class="py-12 text-center text-sm text-zinc-400">
+              No se encontraron registros de stickers NFC en la base de datos.
+            </div>
+          `
+              : `
+            <div class="space-y-4">
+              ${filteredStickers
+                .map((s) => {
+                  const nfcUrl = buildUniqueStickerUrl(s);
+                  const isCopied = state.adminCopiedTagId === s.tagId;
+                  return `
+                  <div class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-4">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
+                      <div class="flex items-center gap-3 flex-wrap">
+                        <span class="px-2.5 py-1 bg-orange-500 text-black text-xs font-bold font-mono tabular-nums rounded">
+                          ${escapeHtml(s.bloodType)}
+                        </span>
+                        <h3 class="text-base font-bold text-white">
+                          ${escapeHtml(s.fullName)}
+                        </h3>
+                        <span class="text-xs font-mono tabular-nums text-orange-400">
+                          ID: ${escapeHtml(s.tagId)}
+                        </span>
+                      </div>
+
+                      <div class="flex items-center gap-2">
+                        <button
+                          type="button"
+                          data-preview-tag="${escapeHtml(s.tagId)}"
+                          class="admin-preview-landing-btn px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                        >
+                          Ver Landing Page
+                        </button>
+                        <button
+                          type="button"
+                          data-write-tag="${escapeHtml(s.tagId)}"
+                          class="admin-write-nfc-btn px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-orange-400 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                        >
+                          Grabar en Tag NFC Físico
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-zinc-300">
+                      <div>
+                        <span class="text-zinc-500 block">Alergias / Condiciones:</span>
+                        <strong>${escapeHtml(s.allergies || 'Ninguna')}</strong> · ${escapeHtml(s.medicalConditions || 'Ninguna')}
+                      </div>
+                      <div>
+                        <span class="text-zinc-500 block">Contacto Principal (1):</span>
+                        <strong>${escapeHtml(s.emergencyContactName)}</strong> (<span class="font-mono tabular-nums">${escapeHtml(s.emergencyContactPhone)}</span>)
+                      </div>
+                      <div>
+                        <span class="text-zinc-500 block">Segundo Contacto (2):</span>
+                        ${
+                          s.secondaryContactName || s.secondaryContactPhone
+                            ? `<strong>${escapeHtml(s.secondaryContactName || 'Contacto 2')}</strong> (<span class="font-mono tabular-nums">${escapeHtml(s.secondaryContactPhone || '-')}</span>)`
+                            : '<span class="text-zinc-500">No registrado</span>'
+                        }
+                      </div>
+                    </div>
+
+                    <!-- Admin NFC URL Configuration Bar -->
+                    <div class="pt-2 border-t border-zinc-800/80 space-y-1.5">
+                      <label class="block text-[11px] font-bold text-orange-400">
+                        URL ÚNICA PARA CONFIGURACIÓN DEL TAG NFC DE ESTA PERSONA:
+                      </label>
+                      <div class="flex items-center gap-2">
+                        <input
+                          type="text"
+                          readonly
+                          value="${escapeHtml(nfcUrl)}"
+                          class="w-full px-3 py-2 text-xs font-mono bg-[#14161A] border border-zinc-800 rounded-lg text-zinc-200 select-all"
+                        />
+                        <button
+                          type="button"
+                          data-copy-tag="${escapeHtml(s.tagId)}"
+                          class="admin-copy-url-btn px-4 py-2 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg shrink-0 transition-colors cursor-pointer"
+                        >
+                          ${isCopied ? '¡URL Copiada!' : 'Copiar URL NFC'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                `;
+                })
+                .join('')}
+            </div>
+          `
+          }
+        </div>
+      `
+      }
+    </div>
+  `;
+}
+
 function syncFormInputsBeforeReRender() {
   const fullNameEl = document.getElementById('fullName');
   if (fullNameEl) state.fullName = fullNameEl.value;
@@ -1117,71 +1570,82 @@ function syncFormInputsBeforeReRender() {
   if (cityEl) state.shippingCity = cityEl.value;
   const zipEl = document.getElementById('shipping-zip-input');
   if (zipEl) state.shippingZip = zipEl.value;
+
+  const adminUserEl = document.getElementById('admin-username-input');
+  if (adminUserEl) state.adminUsernameInput = adminUserEl.value;
+  const adminPassEl = document.getElementById('admin-password-input');
+  if (adminPassEl) state.adminPasswordInput = adminPassEl.value;
+  const adminSearchEl = document.getElementById('admin-search-input');
+  if (adminSearchEl) state.adminSearchQuery = adminSearchEl.value;
 }
 
 export function renderApp() {
   const root = document.getElementById('root');
   if (!root) return;
 
+  let mainContentHtml = '';
+  if (state.viewMode === 'public_landing') {
+    mainContentHtml = renderPublicLandingView();
+  } else if (state.viewMode === 'admin_login') {
+    mainContentHtml = renderAdminLoginView();
+  } else if (state.viewMode === 'admin_panel') {
+    mainContentHtml = renderAdminPanelView();
+  } else {
+    mainContentHtml = `
+      <div class="space-y-8">
+        <!-- Step Progress Bar inside Pantalla Principal (No URL shown to customer) -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#14161A] border border-zinc-800 rounded-xl p-4">
+          <div class="flex items-center gap-2 flex-wrap">
+            <button type="button" id="step-profile-btn" class="px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+              state.mainStep === 'profile_form'
+                ? 'bg-orange-500 text-black'
+                : 'bg-zinc-800/80 text-zinc-300 hover:text-white'
+            }">
+              1. Mis Datos Médicos (Perfil Seguro)
+            </button>
+
+            <button type="button" id="step-checkout-btn" ${!state.userSticker ? 'disabled' : ''} class="px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
+              !state.userSticker
+                ? 'bg-zinc-900 text-zinc-600 cursor-not-allowed'
+                : state.mainStep === 'sticker_checkout'
+                ? 'bg-orange-500 text-black cursor-pointer'
+                : 'bg-zinc-800/80 text-zinc-300 hover:text-white cursor-pointer'
+            }">
+              2. Compra de Sticker NFC Personalizado
+            </button>
+          </div>
+        </div>
+
+        ${
+          state.mainStep === 'sticker_checkout' && state.userSticker
+            ? renderStickerCheckoutStep()
+            : renderProfileFormStep()
+        }
+      </div>
+    `;
+  }
+
   root.innerHTML = `
     <div class="min-h-screen flex flex-col bg-[#0B0C0E] text-zinc-100">
       ${renderHeader()}
 
       <main class="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-10">
-        ${
-          state.viewMode === 'public_landing'
-            ? renderPublicLandingView()
-            : `
-          <div class="space-y-8">
-            <!-- Step Progress Bar inside Pantalla Principal -->
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#14161A] border border-zinc-800 rounded-xl p-4">
-              <div class="flex items-center gap-2">
-                <button type="button" id="step-profile-btn" class="px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                  state.mainStep === 'profile_form'
-                    ? 'bg-orange-500 text-black'
-                    : 'bg-zinc-800/80 text-zinc-300 hover:text-white'
-                }">
-                  1. Mis Datos Médicos (Perfil Seguro)
-                </button>
-
-                <button type="button" id="step-checkout-btn" ${!state.userSticker ? 'disabled' : ''} class="px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
-                  !state.userSticker
-                    ? 'bg-zinc-900 text-zinc-600 cursor-not-allowed'
-                    : state.mainStep === 'sticker_checkout'
-                    ? 'bg-orange-500 text-black cursor-pointer'
-                    : 'bg-zinc-800/80 text-zinc-300 hover:text-white cursor-pointer'
-                }">
-                  2. Compra de Sticker NFC Personalizado
-                </button>
-              </div>
-
-              ${
-                state.userSticker
-                  ? `
-                <button type="button" id="top-preview-landing-btn" class="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-orange-400 text-xs font-bold rounded-lg transition-colors cursor-pointer self-start sm:self-auto">
-                  <span>Ver mi Landing Page NFC (${escapeHtml(state.userSticker.tagId)})</span>
-                </button>
-              `
-                  : ''
-              }
-            </div>
-
-            ${
-              state.mainStep === 'sticker_checkout' && state.userSticker
-                ? renderStickerCheckoutStep()
-                : renderProfileFormStep()
-            }
-          </div>
-        `
-        }
+        ${mainContentHtml}
       </main>
 
+      <!-- Footer with requested slogan "Stickers de emergencia NFC" and "Personal autorizado" link -->
       <footer class="border-t border-zinc-800/80 bg-[#08090B] py-5 px-4 sm:px-8 mt-auto">
-        <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
-          <span>Biker Safe · Perfil Médico de Emergencia y Stickers NFC Personalizados</span>
-          <button type="button" id="footer-main-btn" class="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer">
-            Pantalla Principal
-          </button>
+        <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-400">
+          <span class="font-semibold text-zinc-300">Stickers de emergencia NFC</span>
+          <div class="flex items-center gap-4">
+            <button type="button" id="footer-main-btn" class="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer">
+              Pantalla Principal
+            </button>
+            <span aria-hidden="true" class="text-zinc-700">·</span>
+            <button type="button" id="footer-admin-btn" class="text-zinc-500 hover:text-orange-400 transition-colors cursor-pointer">
+              Personal autorizado
+            </button>
+          </div>
         </div>
       </footer>
     </div>
@@ -1221,6 +1685,21 @@ function bindEvents() {
     });
   }
 
+  const footerAdminBtn = document.getElementById('footer-admin-btn');
+  if (footerAdminBtn) {
+    footerAdminBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      if (state.adminAuthenticated) {
+        state.viewMode = 'admin_panel';
+        subscribeToAllStickersForAdmin();
+      } else {
+        state.adminLoginError = null;
+        state.viewMode = 'admin_login';
+      }
+      renderApp();
+    });
+  }
+
   const signInBtn = document.getElementById('auth-signin-btn');
   if (signInBtn) signInBtn.addEventListener('click', handleGoogleSignIn);
 
@@ -1245,18 +1724,6 @@ function bindEvents() {
       if (!state.userSticker) return;
       syncFormInputsBeforeReRender();
       state.mainStep = 'sticker_checkout';
-      renderApp();
-    });
-  }
-
-  const topPreviewLandingBtn = document.getElementById('top-preview-landing-btn');
-  if (topPreviewLandingBtn) {
-    topPreviewLandingBtn.addEventListener('click', () => {
-      if (!state.userSticker) return;
-      syncFormInputsBeforeReRender();
-      state.landingSticker = state.userSticker;
-      state.landingTagId = state.userSticker.tagId;
-      state.viewMode = 'public_landing';
       renderApp();
     });
   }
@@ -1306,7 +1773,7 @@ function bindEvents() {
           state.user = activeUser;
         } catch {
           state.formError =
-            'Inicia sesión con tu cuenta segura para guardar tu perfil médico y vincular tu Sticker NFC.';
+            'Inicia sesión con tu cuenta segura para guardar tu perfil médico y continuar a la compra de tu Sticker NFC.';
           renderApp();
           return;
         }
@@ -1395,27 +1862,10 @@ function bindEvents() {
     });
   }
 
-  const openPublicLandingBtn = document.getElementById('open-public-landing-btn');
-  if (openPublicLandingBtn) {
-    openPublicLandingBtn.addEventListener('click', () => {
-      if (!state.userSticker) return;
-      syncFormInputsBeforeReRender();
-      state.landingSticker = state.userSticker;
-      state.landingTagId = state.userSticker.tagId;
-      state.viewMode = 'public_landing';
-      renderApp();
-    });
-  }
-
-  const openPublicLandingAfterOrderBtn = document.getElementById(
-    'open-public-landing-after-order-btn'
-  );
-  if (openPublicLandingAfterOrderBtn) {
-    openPublicLandingAfterOrderBtn.addEventListener('click', () => {
-      if (!state.userSticker) return;
-      state.landingSticker = state.userSticker;
-      state.landingTagId = state.userSticker.tagId;
-      state.viewMode = 'public_landing';
+  const backToAdminBtn = document.getElementById('back-to-admin-btn');
+  if (backToAdminBtn) {
+    backToAdminBtn.addEventListener('click', () => {
+      state.viewMode = 'admin_panel';
       renderApp();
     });
   }
@@ -1426,74 +1876,6 @@ function bindEvents() {
       syncFormInputsBeforeReRender();
       state.mainStep = 'profile_form';
       renderApp();
-    });
-  }
-
-  const copyCheckoutUrlBtn = document.getElementById('copy-checkout-url-btn');
-  if (copyCheckoutUrlBtn) {
-    copyCheckoutUrlBtn.addEventListener('click', async () => {
-      const target = state.userSticker;
-      if (!target) return;
-      try {
-        await navigator.clipboard.writeText(buildUniqueStickerUrl(target));
-        state.copiedUrl = true;
-        renderApp();
-        setTimeout(() => {
-          state.copiedUrl = false;
-          renderApp();
-        }, 2000);
-      } catch {
-        // Ignore
-      }
-    });
-  }
-
-  const copyLandingUrlBtn = document.getElementById('copy-landing-url-btn');
-  if (copyLandingUrlBtn) {
-    copyLandingUrlBtn.addEventListener('click', async () => {
-      const target = state.landingSticker || state.userSticker;
-      if (!target) return;
-      try {
-        await navigator.clipboard.writeText(buildUniqueStickerUrl(target));
-        state.copiedUrl = true;
-        renderApp();
-        setTimeout(() => {
-          state.copiedUrl = false;
-          renderApp();
-        }, 2000);
-      } catch {
-        // Ignore
-      }
-    });
-  }
-
-  const writeWebNfcBtn = document.getElementById('write-web-nfc-btn');
-  if (writeWebNfcBtn) {
-    writeWebNfcBtn.addEventListener('click', async () => {
-      const target = state.userSticker;
-      if (!target) return;
-      const uniqueUrl = buildUniqueStickerUrl(target);
-      if (!('NDEFReader' in window)) {
-        state.nfcWriteMessage =
-          'Para grabar un tag NFC físico desde tu navegador utiliza Chrome en Android con NFC activado, o abre directamente tu Landing Page de Emergencia con el botón superior.';
-        renderApp();
-        return;
-      }
-      try {
-        state.nfcWriteMessage = 'Acerca tu sticker NFC físico al reverso del teléfono...';
-        renderApp();
-        const ndef = new window.NDEFReader();
-        await ndef.write({
-          records: [{ recordType: 'url', data: uniqueUrl }],
-        });
-        state.nfcWriteMessage = '¡URL única grabada exitosamente en tu chip NFC!';
-        renderApp();
-      } catch (err) {
-        state.nfcWriteMessage = `No se pudo completar la grabación NFC: ${
-          err instanceof Error ? err.message : 'Verifica permisos NFC'
-        }`;
-        renderApp();
-      }
     });
   }
 
@@ -1528,12 +1910,216 @@ function bindEvents() {
       renderApp();
     });
   }
+
+  // ==========================================================================
+  // Admin Login & Admin Panel Events
+  // ==========================================================================
+  const adminBackMainBtn = document.getElementById('admin-back-main-btn');
+  if (adminBackMainBtn) {
+    adminBackMainBtn.addEventListener('click', () => {
+      state.viewMode = 'main';
+      renderApp();
+    });
+  }
+
+  const adminLoginForm = document.getElementById('admin-login-form');
+  if (adminLoginForm) {
+    adminLoginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      syncFormInputsBeforeReRender();
+      state.adminLoginError = null;
+
+      const userClean = state.adminUsernameInput.trim().toLowerCase();
+      const passClean = state.adminPasswordInput.trim();
+
+      if (
+        (userClean === 'admin' || userClean === 'gami.rodrigo@gmail.com') &&
+        passClean === 'bikersafe2026'
+      ) {
+        if (!state.user) {
+          const loggedUser = await handleGoogleSignIn();
+          if (!loggedUser) {
+            state.adminLoginError =
+              'Se requiere confirmar la sesión de Google autorizada para consultar la base de datos.';
+            renderApp();
+            return;
+          }
+        }
+        state.adminAuthenticated = true;
+        state.viewMode = 'admin_panel';
+        subscribeToAllStickersForAdmin();
+        renderApp();
+      } else {
+        state.adminLoginError =
+          'Usuario o contraseña incorrectos. Verifica tus credenciales de personal autorizado.';
+        renderApp();
+      }
+    });
+  }
+
+  const adminTabRecordsBtn = document.getElementById('admin-tab-records-btn');
+  if (adminTabRecordsBtn) {
+    adminTabRecordsBtn.addEventListener('click', () => {
+      state.adminTab = 'records';
+      renderApp();
+    });
+  }
+
+  const adminTabPackagesBtn = document.getElementById('admin-tab-packages-btn');
+  if (adminTabPackagesBtn) {
+    adminTabPackagesBtn.addEventListener('click', () => {
+      state.adminTab = 'packages';
+      state.adminPackagesSavedSuccess = false;
+      state.adminPackagesError = null;
+      renderApp();
+    });
+  }
+
+  const adminExitBtn = document.getElementById('admin-exit-btn');
+  if (adminExitBtn) {
+    adminExitBtn.addEventListener('click', () => {
+      state.adminAuthenticated = false;
+      state.viewMode = 'main';
+      renderApp();
+    });
+  }
+
+  const adminSearchInput = document.getElementById('admin-search-input');
+  if (adminSearchInput) {
+    adminSearchInput.addEventListener('input', (e) => {
+      state.adminSearchQuery = e.target.value;
+      const pos = e.target.selectionStart;
+      renderApp();
+      const newInput = document.getElementById('admin-search-input');
+      if (newInput) {
+        newInput.focus();
+        newInput.setSelectionRange(pos, pos);
+      }
+    });
+  }
+
+  const adminCopyBtns = document.querySelectorAll('.admin-copy-url-btn');
+  adminCopyBtns.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const tagId = btn.getAttribute('data-copy-tag');
+      const found = state.adminAllStickers.find((s) => s.tagId === tagId);
+      if (!found) return;
+      try {
+        await navigator.clipboard.writeText(buildUniqueStickerUrl(found));
+        state.adminCopiedTagId = tagId;
+        renderApp();
+        setTimeout(() => {
+          state.adminCopiedTagId = null;
+          renderApp();
+        }, 2000);
+      } catch {
+        // Ignore
+      }
+    });
+  });
+
+  const adminPreviewBtns = document.querySelectorAll('.admin-preview-landing-btn');
+  adminPreviewBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tagId = btn.getAttribute('data-preview-tag');
+      const found = state.adminAllStickers.find((s) => s.tagId === tagId);
+      if (!found) return;
+      state.landingSticker = found;
+      state.landingTagId = found.tagId;
+      state.viewMode = 'public_landing';
+      renderApp();
+    });
+  });
+
+  const adminWriteNfcBtns = document.querySelectorAll('.admin-write-nfc-btn');
+  adminWriteNfcBtns.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const tagId = btn.getAttribute('data-write-tag');
+      const found = state.adminAllStickers.find((s) => s.tagId === tagId);
+      if (!found) return;
+      const nfcUrl = buildUniqueStickerUrl(found);
+      if (!('NDEFReader' in window)) {
+        state.adminNfcMessage = `URL lista para ${found.fullName} (${found.tagId}). Para grabar directamente desde el navegador abre este panel en Chrome para Android con NFC activo, o copia la URL para tu grabador NFC de escritorio.`;
+        renderApp();
+        return;
+      }
+      try {
+        state.adminNfcMessage = `Acerca el tag NFC físico para grabar el perfil de ${found.fullName} (${found.tagId})...`;
+        renderApp();
+        const ndef = new window.NDEFReader();
+        await ndef.write({
+          records: [{ recordType: 'url', data: nfcUrl }],
+        });
+        state.adminNfcMessage = `¡Tag NFC grabado exitosamente para ${found.fullName} (${found.tagId})!`;
+        renderApp();
+      } catch (err) {
+        state.adminNfcMessage = `No se pudo grabar el tag NFC: ${
+          err instanceof Error ? err.message : 'Verifica permisos NFC'
+        }`;
+        renderApp();
+      }
+    });
+  });
+
+  const adminPackagesForm = document.getElementById('admin-packages-form');
+  if (adminPackagesForm) {
+    adminPackagesForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      state.adminPackagesSavedSuccess = false;
+      state.adminPackagesError = null;
+
+      const updatedPackages = state.packages.map((pkg, idx) => {
+        const nameEl = document.getElementById(`pkg-name-${idx}`);
+        const subEl = document.getElementById(`pkg-subtitle-${idx}`);
+        const priceEl = document.getElementById(`pkg-price-${idx}`);
+        const specsEl = document.getElementById(`pkg-specs-${idx}`);
+
+        const name = String(nameEl ? nameEl.value : pkg.name).trim().slice(0, 80);
+        const subtitle = String(subEl ? subEl.value : pkg.subtitle).trim().slice(0, 80);
+        const priceNum = Math.max(1, Math.min(100000, Number(priceEl ? priceEl.value : pkg.price) || pkg.price));
+        const specs = String(specsEl ? specsEl.value : pkg.specs).trim().slice(0, 250);
+
+        return {
+          pkgId: pkg.pkgId,
+          name: name.length >= 2 ? name : pkg.name,
+          subtitle: subtitle.length >= 1 ? subtitle : pkg.subtitle,
+          price: priceNum,
+          specs: specs.length >= 2 ? specs : pkg.specs,
+          sortOrder: idx + 1,
+        };
+      });
+
+      state.adminSavingPackages = true;
+      renderApp();
+
+      try {
+        for (const item of updatedPackages) {
+          await setDoc(doc(db, 'packages', item.pkgId), {
+            ...item,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        state.packages = updatedPackages;
+        state.adminPackagesSavedSuccess = true;
+      } catch (err) {
+        state.adminPackagesError =
+          err instanceof Error
+            ? `No se pudieron guardar los paquetes en la base de datos: ${err.message}`
+            : 'Error al guardar las opciones de compra.';
+      } finally {
+        state.adminSavingPackages = false;
+        renderApp();
+      }
+    });
+  }
 }
 
 // ============================================================================
-// 5. Bootstrapping Application
+// 6. Bootstrapping Application
 // ============================================================================
 function initBikerSafeApp() {
+  subscribeToPackages();
+
   const params = new URLSearchParams(window.location.search);
   const tagParam = params.get('tag');
   const encodedPacket = params.get('p');
@@ -1560,6 +2146,9 @@ function initBikerSafeApp() {
       }
     } else {
       subscribeToUserSticker(currentUser);
+      if (state.adminAuthenticated) {
+        subscribeToAllStickersForAdmin();
+      }
     }
     renderApp();
   });

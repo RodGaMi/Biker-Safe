@@ -18,6 +18,10 @@ service cloud.firestore {
       return id is string && id.size() >= 4 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidPkgId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 32 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -39,10 +43,7 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isVerifiedUser() && (
-        request.auth.token.email == 'gami.rodrigo@gmail.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
+      return isVerifiedUser() && request.auth.token.email == 'gami.rodrigo@gmail.com';
     }
 
     // =========================================================================
@@ -167,6 +168,34 @@ service cloud.firestore {
       data.createdAt is timestamp;
     }
 
+    function isValidStickerPackageOption(data) {
+      return data.keys().hasAll([
+        'pkgId',
+        'name',
+        'subtitle',
+        'price',
+        'specs',
+        'sortOrder',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'pkgId',
+        'name',
+        'subtitle',
+        'price',
+        'specs',
+        'sortOrder',
+        'updatedAt'
+      ]) &&
+      data.pkgId is string && data.pkgId.size() >= 2 && data.pkgId.size() <= 32 && data.pkgId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.name is string && data.name.size() >= 2 && data.name.size() <= 80 &&
+      data.subtitle is string && data.subtitle.size() >= 1 && data.subtitle.size() <= 80 &&
+      data.price is number && data.price >= 1 && data.price <= 100000 &&
+      data.specs is string && data.specs.size() >= 2 && data.specs.size() <= 250 &&
+      data.sortOrder is number && data.sortOrder >= 1 && data.sortOrder <= 10 &&
+      data.updatedAt is timestamp;
+    }
+
     // =========================================================================
     // Collection 1: /users/{userId}/private/{docId} (PII Split Collection)
     // =========================================================================
@@ -208,9 +237,10 @@ service cloud.firestore {
         isAdmin()
       );
 
-      // List queries strictly enforced against resource.data.ownerId to block scraping
+      // List queries strictly enforced against resource.data without get()/exists() calls
       allow list: if isVerifiedUser() && (
         existing().ownerId == request.auth.uid ||
+        existing().isActive == true ||
         isAdmin()
       );
 
@@ -299,6 +329,38 @@ service cloud.firestore {
           isAdmin()
         );
       }
+    }
+
+    // =========================================================================
+    // Collection 4: /packages/{pkgId} (Configurable Purchase Options)
+    // =========================================================================
+    match /packages/{pkgId} {
+      allow get: if isValidPkgId(pkgId);
+      allow list: if existing().sortOrder >= 1;
+
+      allow create: if isVerifiedUser() &&
+        isValidPkgId(pkgId) &&
+        isValidStickerPackageOption(incoming()) &&
+        incoming().pkgId == pkgId &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidPkgId(pkgId) &&
+        isValidStickerPackageOption(incoming()) &&
+        incoming().pkgId == existing().pkgId &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'subtitle',
+            'price',
+            'specs',
+            'sortOrder',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if isAdmin() && isValidPkgId(pkgId);
     }
   }
 }

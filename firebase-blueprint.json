@@ -261,6 +261,60 @@
         "locationNote",
         "createdAt"
       ]
+    },
+    "StickerPackageOption": {
+      "title": "StickerPackageOption",
+      "description": "Configurable NFC sticker purchase option managed by authorized administrators.",
+      "type": "object",
+      "properties": {
+        "pkgId": {
+          "type": "string",
+          "description": "Unique package identifier (single, pro, squad).",
+          "minLength": 2,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display title of the NFC sticker package.",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "subtitle": {
+          "type": "string",
+          "description": "Short subtitle or highlight badge text.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "price": {
+          "type": "number",
+          "description": "Price in MXN."
+        },
+        "specs": {
+          "type": "string",
+          "description": "Technical specifications and package contents.",
+          "minLength": 2,
+          "maxLength": 250
+        },
+        "sortOrder": {
+          "type": "number",
+          "description": "Display order index (1, 2, 3)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update."
+        }
+      },
+      "required": [
+        "pkgId",
+        "name",
+        "subtitle",
+        "price",
+        "specs",
+        "sortOrder",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -281,6 +335,12 @@
         "$ref": "#/entities/ScanLog"
       },
       "description": "Immutable audit log of emergency NFC tag reads."
+    },
+    "/packages/{pkgId}": {
+      "schema": {
+        "$ref": "#/entities/StickerPackageOption"
+      },
+      "description": "Purchase package options editable from the internal administration panel."
     }
   }
 }

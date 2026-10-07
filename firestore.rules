@@ -248,6 +248,7 @@ service cloud.firestore {
         'selectedColors',
         'totalPrice',
         'paymentMethod',
+        'deliveryMethod',
         'status',
         'recipientName',
         'recipientPhone',
@@ -259,6 +260,12 @@ service cloud.firestore {
         'createdAt',
         'updatedAt'
       ]) &&
+      (!('deliveryMethod' in data) || (
+        data.deliveryMethod is string &&
+        data.deliveryMethod.size() >= 5 &&
+        data.deliveryMethod.size() <= 40 &&
+        data.deliveryMethod in ['personal_cdmx_edomex', 'paqueteria_nacional']
+      )) &&
       data.orderId is string && data.orderId.size() >= 4 && data.orderId.size() <= 64 && data.orderId.matches('^[a-zA-Z0-9_\\-]+$') &&
       data.tagId is string && data.tagId.size() >= 4 && data.tagId.size() <= 64 && data.tagId.matches('^[a-zA-Z0-9_\\-]+$') &&
       data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&

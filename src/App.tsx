@@ -447,6 +447,10 @@ export function BikerSafeApp() {
       const cleanName = pkg.name.trim().slice(0, 80);
       const cleanSubtitle = pkg.subtitle.trim().slice(0, 80);
       const cleanPrice = Math.max(1, Math.min(100000, Number(pkg.price) || 249));
+      const cleanShippingCost = Math.max(
+        0,
+        Math.min(50000, Math.round(Number(pkg.shippingCost) || 0))
+      );
       const cleanStickerCount = Math.max(
         1,
         Math.min(10, Math.round(Number(pkg.stickerCount) || 1))
@@ -466,6 +470,7 @@ export function BikerSafeApp() {
           name: cleanName.length >= 2 ? cleanName : pkg.name,
           subtitle: cleanSubtitle.length >= 1 ? cleanSubtitle : pkg.subtitle,
           price: cleanPrice,
+          shippingCost: cleanShippingCost,
           specs: cleanSpecs.length >= 2 ? cleanSpecs : pkg.specs,
           stickerCount: cleanStickerCount,
           availableColors: cleanAvailableColors,

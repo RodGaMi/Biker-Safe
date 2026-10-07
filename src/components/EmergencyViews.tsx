@@ -27,6 +27,7 @@ import {
   OrderStatus,
   ORDER_STATUSES,
   ORDER_STATUS_LABELS,
+  DeliveryMethod,
   DEFAULT_STICKER_PACKAGES,
   DEFAULT_PAYMENT_SETTINGS,
   ALL_STICKER_COLORS,
@@ -36,6 +37,13 @@ import {
   buildUniqueStickerUrl,
   buildWhatsAppOrderUrl,
 } from '../lib/firebase';
+
+function isPersonalDeliveryOrder(order: StickerOrderRecord): boolean {
+  return (
+    order.deliveryMethod === 'personal_cdmx_edomex' ||
+    String(order.shippingStreet || '').includes('Entrega Personal')
+  );
+}
 
 // ============================================================================
 // 1. Public Emergency Landing Page (No passwords, no login walls, direct access)
@@ -371,6 +379,9 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
     'Rojo',
     'Negro',
   ]);
+  const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>(
+    'personal_cdmx_edomex'
+  );
   const [recipientName, setRecipientName] = useState(sticker.fullName || '');
   const [recipientPhone, setRecipientPhone] = useState('');
   const [shippingStreet, setShippingStreet] = useState('');
@@ -434,6 +445,19 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
     setCheckoutError(null);
     setCheckoutSubmitting(true);
     try {
+      const cleanStreet =
+        deliveryMethod === 'personal_cdmx_edomex'
+          ? 'Entrega Personal (Edo. de México / CDMX)'
+          : shippingStreet.trim();
+      const cleanColony =
+        deliveryMethod === 'personal_cdmx_edomex'
+          ? 'Acordar vía WhatsApp'
+          : shippingColony.trim();
+      const cleanZip =
+        deliveryMethod === 'personal_cdmx_edomex'
+          ? 'N/A'
+          : shippingPostalCode.trim();
+
       const created = await onCreateOrder({
         tagId: sticker.tagId,
         riderName: sticker.fullName,
@@ -442,12 +466,13 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
         stickerCount,
         selectedColors: chosenColors,
         totalPrice: Number(selectedPkg.price) || 249,
+        deliveryMethod,
         recipientName: recipientName.trim() || sticker.fullName,
         recipientPhone: recipientPhone.trim(),
-        shippingStreet: shippingStreet.trim(),
-        shippingColony: shippingColony.trim(),
+        shippingStreet: cleanStreet,
+        shippingColony: cleanColony,
         shippingCityState: shippingCityState.trim(),
-        shippingPostalCode: shippingPostalCode.trim(),
+        shippingPostalCode: cleanZip,
         shippingNotes: shippingNotes.trim(),
       });
       setActiveOrder(created);
@@ -455,7 +480,7 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
       setCheckoutError(
         err instanceof Error
           ? err.message
-          : 'No se pudo registrar el pedido. Verifica tus datos de envío.'
+          : 'No se pudo registrar el pedido. Verifica tus datos de entrega.'
       );
     } finally {
       setCheckoutSubmitting(false);
@@ -573,8 +598,7 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
               </div>
             </div>
 
-            <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-400">
-              <span>Chip NTAG213 · Resina Epóxica 3M</span>
+            <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-end text-[11px] text-zinc-400">
               <span>Listo para colocar en casco</span>
             </div>
           </div>
@@ -711,22 +735,42 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                     .join(' · ')}
                 </div>
                 <div>
+                  <strong className="text-white">Modalidad de Entrega:</strong>{' '}
+                  <span className="text-orange-400 font-semibold">
+                    {isPersonalDeliveryOrder(activeOrder)
+                      ? 'Entrega Personal (Solo Estado de México y CDMX · Se acuerda vía WhatsApp)'
+                      : 'Envío por Paquetería a toda la República (Se acuerda vía WhatsApp)'}
+                  </span>
+                </div>
+                <div>
                   <strong className="text-white">Recibe:</strong>{' '}
-                  {activeOrder.recipientName} · Tel:{' '}
+                  {activeOrder.recipientName} · Tel / WhatsApp:{' '}
                   <span className="font-mono tabular-nums">
                     {activeOrder.recipientPhone}
                   </span>
                 </div>
-                <div>
-                  <strong className="text-white">Dirección de Envío:</strong>{' '}
-                  {activeOrder.shippingStreet}, Col.{' '}
-                  {activeOrder.shippingColony}, C.P.{' '}
-                  {activeOrder.shippingPostalCode},{' '}
-                  {activeOrder.shippingCityState}
-                  {activeOrder.shippingNotes
-                    ? ` (${activeOrder.shippingNotes})`
-                    : ''}
-                </div>
+                {isPersonalDeliveryOrder(activeOrder) ? (
+                  <div>
+                    <strong className="text-white">
+                      Zona / Alcaldía o Municipio (CDMX / EdoMéx):
+                    </strong>{' '}
+                    {activeOrder.shippingCityState}
+                    {activeOrder.shippingNotes
+                      ? ` · Punto/Horario sugerido: ${activeOrder.shippingNotes}`
+                      : ''}
+                  </div>
+                ) : (
+                  <div>
+                    <strong className="text-white">Dirección de Envío:</strong>{' '}
+                    {activeOrder.shippingStreet}, Col.{' '}
+                    {activeOrder.shippingColony}, C.P.{' '}
+                    {activeOrder.shippingPostalCode},{' '}
+                    {activeOrder.shippingCityState}
+                    {activeOrder.shippingNotes
+                      ? ` (${activeOrder.shippingNotes})`
+                      : ''}
+                  </div>
+                )}
               </div>
 
               {/* Primary Action: Send Order & Receipt via WhatsApp */}
@@ -738,7 +782,7 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                   className="w-full py-4 px-6 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors text-center"
                 >
                   <span>
-                    Enviar Pedido y Comprobante de Pago por WhatsApp
+                    Enviar Comprobante y Acordar Entrega por WhatsApp
                   </span>
                 </a>
 
@@ -869,21 +913,72 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                 </div>
               </div>
 
-              {/* Step 3: Shipping Information Form */}
+              {/* Step 3: Delivery Method (2 options, both agreed via WhatsApp) */}
               <div className="space-y-4 pt-2 border-t border-zinc-800">
                 <div>
                   <div className="flex items-center gap-2 text-xs font-bold text-zinc-300">
                     <Truck className="w-4 h-4 text-orange-500" />
                     <span>
-                      3. Datos de Entrega para el Envío de tus Stickers NFC
+                      3. Modalidad de Entrega (En ambos casos se acuerda vía
+                      WhatsApp)
                     </span>
                   </div>
                   <p className="text-[11px] text-zinc-400 mt-0.5">
-                    Ingresa la dirección donde recibirás tus stickers ya programados con tu información de emergencia.
+                    Elige si prefieres entrega personal en Estado de México /
+                    CDMX o envío por paquetería a toda la República. Ambos
+                    métodos se coordinan directamente por WhatsApp.
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setDeliveryMethod('personal_cdmx_edomex')}
+                    className={`p-4 rounded-xl border text-left transition-colors cursor-pointer space-y-1.5 ${
+                      deliveryMethod === 'personal_cdmx_edomex'
+                        ? 'bg-[#0B0C0E] border-orange-500'
+                        : 'bg-[#0B0C0E]/60 border-zinc-800 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-white">
+                        1. Entrega Personal
+                      </span>
+                      <span className="text-[11px] font-semibold text-orange-400">
+                        Solo Edo. Méx. y CDMX
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      Nos ponemos de acuerdo vía WhatsApp sobre el punto de
+                      encuentro, día y horario en CDMX o Estado de México.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeliveryMethod('paqueteria_nacional')}
+                    className={`p-4 rounded-xl border text-left transition-colors cursor-pointer space-y-1.5 ${
+                      deliveryMethod === 'paqueteria_nacional'
+                        ? 'bg-[#0B0C0E] border-orange-500'
+                        : 'bg-[#0B0C0E]/60 border-zinc-800 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-white">
+                        2. Envío por Paquetería
+                      </span>
+                      <span className="text-[11px] font-semibold text-orange-400">
+                        Toda la República
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      Enviamos a cualquier estado de la República Mexicana. La
+                      paquetería, cotización y guía se acuerdan vía WhatsApp.
+                    </p>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                   <div>
                     <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
                       Nombre de quien recibe
@@ -900,7 +995,7 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                      Teléfono / WhatsApp de Contacto
+                      Teléfono / WhatsApp para acordar entrega
                     </label>
                     <input
                       type="tel"
@@ -914,81 +1009,130 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-                  <div className="sm:col-span-7">
-                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                      Calle y Número (Ext. / Int.)
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      maxLength={200}
-                      value={shippingStreet}
-                      onChange={(e) => setShippingStreet(e.target.value)}
-                      placeholder="Ej. Av. Insurgentes Sur 1450 Int. 4B"
-                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
-                  <div className="sm:col-span-5">
-                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                      Colonia
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      maxLength={120}
-                      value={shippingColony}
-                      onChange={(e) => setShippingColony(e.target.value)}
-                      placeholder="Ej. Col. Del Valle"
-                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
-                </div>
+                {deliveryMethod === 'personal_cdmx_edomex' ? (
+                  <div className="p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-4">
+                    <div className="text-xs text-orange-400 font-semibold">
+                      Entrega Personal en Estado de México y CDMX · Se acuerda
+                      punto y horario por WhatsApp
+                    </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-                  <div className="sm:col-span-8">
-                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                      Ciudad, Municipio y Estado
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      maxLength={120}
-                      value={shippingCityState}
-                      onChange={(e) => setShippingCityState(e.target.value)}
-                      placeholder="Ej. Benito Juárez, Ciudad de México"
-                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
-                  <div className="sm:col-span-4">
-                    <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                      Código Postal
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      maxLength={15}
-                      value={shippingPostalCode}
-                      onChange={(e) => setShippingPostalCode(e.target.value)}
-                      placeholder="Ej. 03100"
-                      className="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
-                </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                        Alcaldía (CDMX) o Municipio (Estado de México)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        maxLength={120}
+                        value={shippingCityState}
+                        onChange={(e) => setShippingCityState(e.target.value)}
+                        placeholder="Ej. Naucalpan, Edo. de México / Benito Juárez, CDMX"
+                        className="w-full px-4 py-2.5 text-sm bg-[#14161A] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
-                    Referencias del domicilio (Opcional)
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={250}
-                    value={shippingNotes}
-                    onChange={(e) => setShippingNotes(e.target.value)}
-                    placeholder="Ej. Entre calle Pilares y Matías Romero, portón negro"
-                    className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                        Punto o zona sugerida / Horario preferido (Se acuerda
+                        vía WhatsApp)
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={250}
+                        value={shippingNotes}
+                        onChange={(e) => setShippingNotes(e.target.value)}
+                        placeholder="Ej. Estación de Metro / Plaza comercial cercana, tardes o fin de semana"
+                        className="w-full px-4 py-2.5 text-sm bg-[#14161A] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-4">
+                    <div className="text-xs text-orange-400 font-semibold">
+                      Envío por Paquetería a toda la República · Se acuerda
+                      envío y guía por WhatsApp
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                      <div className="sm:col-span-7">
+                        <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                          Calle y Número (Ext. / Int.)
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          maxLength={200}
+                          value={shippingStreet}
+                          onChange={(e) => setShippingStreet(e.target.value)}
+                          placeholder="Ej. Av. Insurgentes Sur 1450 Int. 4B"
+                          className="w-full px-4 py-2.5 text-sm bg-[#14161A] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-5">
+                        <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                          Colonia
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          maxLength={120}
+                          value={shippingColony}
+                          onChange={(e) => setShippingColony(e.target.value)}
+                          placeholder="Ej. Col. Del Valle"
+                          className="w-full px-4 py-2.5 text-sm bg-[#14161A] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                      <div className="sm:col-span-8">
+                        <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                          Ciudad, Municipio y Estado de la República
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          maxLength={120}
+                          value={shippingCityState}
+                          onChange={(e) => setShippingCityState(e.target.value)}
+                          placeholder="Ej. Guadalajara, Jalisco / Monterrey, Nuevo León"
+                          className="w-full px-4 py-2.5 text-sm bg-[#14161A] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-4">
+                        <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                          Código Postal
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          maxLength={15}
+                          value={shippingPostalCode}
+                          onChange={(e) =>
+                            setShippingPostalCode(e.target.value)
+                          }
+                          placeholder="Ej. 44100"
+                          className="w-full px-4 py-2.5 text-sm font-mono tabular-nums bg-[#14161A] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-zinc-400 mb-1.5">
+                        Referencias del domicilio / Notas para paquetería
+                        (Opcional)
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={250}
+                        value={shippingNotes}
+                        onChange={(e) => setShippingNotes(e.target.value)}
+                        placeholder="Ej. Entre calles Pilares y Matías Romero, fachada gris"
+                        className="w-full px-4 py-2.5 text-sm bg-[#14161A] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Step 4: Payment Method Summary (Option B: SPEI + WhatsApp) */}
@@ -1055,7 +1199,11 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                         Colores:{' '}
                         {(ord.selectedColors || [])
                           .map((c, i) => `#${i + 1}: ${c}`)
-                          .join(', ')}
+                          .join(', ')}{' '}
+                        ·{' '}
+                        {isPersonalDeliveryOrder(ord)
+                          ? 'Entrega Personal (CDMX / EdoMéx · WhatsApp)'
+                          : 'Envío por Paquetería (WhatsApp)'}
                       </div>
                     </div>
                     <button
@@ -1673,13 +1821,17 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
                         {customerCleanPhone && (
                           <a
                             href={`https://wa.me/${customerCleanPhone}?text=${encodeURIComponent(
-                              `Hola ${ord.recipientName}, te escribimos de Biker Safe respecto a tu pedido #${ord.orderId.toUpperCase()} (${ord.pkgName}).`
+                              `Hola ${ord.recipientName}, te escribimos de Biker Safe respecto a tu pedido #${ord.orderId.toUpperCase()} (${ord.pkgName}) para acordar tu ${
+                                isPersonalDeliveryOrder(ord)
+                                  ? 'entrega personal en CDMX / Estado de México'
+                                  : 'envío por paquetería'
+                              }.`
                             )}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors"
                           >
-                            Contactar WhatsApp Cliente
+                            Acordar Entrega por WhatsApp
                           </a>
                         )}
 
@@ -1750,29 +1902,62 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
                       <div className="md:col-span-7 space-y-1">
                         <span className="text-zinc-500 block">
-                          Datos de Entrega y Envío:
+                          Modalidad de Entrega:{' '}
+                          <strong className="text-orange-400">
+                            {isPersonalDeliveryOrder(ord)
+                              ? 'Entrega Personal (Solo Edo. de México y CDMX · Acordar vía WhatsApp)'
+                              : 'Envío por Paquetería a toda la República (Acordar vía WhatsApp)'}
+                          </strong>
                         </span>
                         <div>
                           <strong className="text-white">Recibe:</strong>{' '}
                           {ord.recipientName} ·{' '}
-                          <strong className="text-white">Tel:</strong>{' '}
+                          <strong className="text-white">
+                            Tel / WhatsApp:
+                          </strong>{' '}
                           <span className="font-mono tabular-nums text-orange-300">
                             {ord.recipientPhone}
                           </span>
                         </div>
-                        <div>
-                          <strong className="text-white">Dirección:</strong>{' '}
-                          {ord.shippingStreet}, Col. {ord.shippingColony}, C.P.{' '}
-                          <span className="font-mono">
-                            {ord.shippingPostalCode}
-                          </span>
-                          , {ord.shippingCityState}
-                        </div>
-                        {ord.shippingNotes && (
-                          <div>
-                            <strong className="text-white">Referencias:</strong>{' '}
-                            {ord.shippingNotes}
-                          </div>
+                        {isPersonalDeliveryOrder(ord) ? (
+                          <>
+                            <div>
+                              <strong className="text-white">
+                                Zona / Alcaldía o Municipio (CDMX / EdoMéx):
+                              </strong>{' '}
+                              {ord.shippingCityState}
+                            </div>
+                            {ord.shippingNotes && (
+                              <div>
+                                <strong className="text-white">
+                                  Punto / Horario sugerido:
+                                </strong>{' '}
+                                {ord.shippingNotes}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <div>
+                              <strong className="text-white">
+                                Dirección de Paquetería:
+                              </strong>{' '}
+                              {ord.shippingStreet}, Col. {ord.shippingColony},
+                              C.P.{' '}
+                              <span className="font-mono">
+                                {ord.shippingPostalCode}
+                              </span>
+                              , {ord.shippingCityState}
+                            </div>
+                            {ord.shippingNotes && (
+                              <div>
+                                <strong className="text-white">
+                                  Referencias:
+                                </strong>{' '}
+                                {ord.shippingNotes}
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     </div>

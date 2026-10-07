@@ -406,6 +406,16 @@
           "minLength": 4,
           "maxLength": 30
         },
+        "deliveryMethod": {
+          "type": "string",
+          "description": "Selected delivery method (personal delivery in EdoMex/CDMX or parcel shipping across Mexico, both coordinated via WhatsApp).",
+          "enum": [
+            "personal_cdmx_edomex",
+            "paqueteria_nacional"
+          ],
+          "minLength": 5,
+          "maxLength": 40
+        },
         "status": {
           "type": "string",
           "description": "Order fulfillment status.",

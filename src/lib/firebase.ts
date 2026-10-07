@@ -194,6 +194,20 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   enviado: 'Enviado',
 };
 
+export const DELIVERY_METHODS = [
+  'personal_cdmx_edomex',
+  'paqueteria_nacional',
+] as const;
+
+export type DeliveryMethod = (typeof DELIVERY_METHODS)[number];
+
+export const DELIVERY_METHOD_LABELS: Record<DeliveryMethod, string> = {
+  personal_cdmx_edomex:
+    'Entrega Personal (Solo Edo. de México y CDMX · Acordar vía WhatsApp)',
+  paqueteria_nacional:
+    'Envío por Paquetería a toda la República (Acordar vía WhatsApp)',
+};
+
 export interface StickerOrderRecord {
   orderId: string;
   tagId: string;
@@ -205,6 +219,7 @@ export interface StickerOrderRecord {
   selectedColors: string[];
   totalPrice: number;
   paymentMethod: 'SPEI_WHATSAPP';
+  deliveryMethod?: DeliveryMethod;
   status: OrderStatus;
   recipientName: string;
   recipientPhone: string;
@@ -236,7 +251,7 @@ export const DEFAULT_PAYMENT_SETTINGS: PaymentSettingsRecord = {
   accountOrCard: '4152 3138 0000 0000',
   whatsappNumber: '5215512345678',
   paymentInstructions:
-    'Realiza tu transferencia SPEI por el monto exacto indicando tu Folio de Pedido en el concepto y envía tu comprobante por WhatsApp para programar y despachar tus stickers NFC.',
+    'Realiza tu transferencia SPEI por el monto exacto indicando tu Folio de Pedido en el concepto y envía tu comprobante por WhatsApp para programar tus stickers NFC y acordar tu entrega.',
 };
 
 export function generateUniqueOrderId(): string {
@@ -259,22 +274,39 @@ export function buildWhatsAppOrderUrl(
     .map((c, i) => `Sticker #${i + 1}: ${c}`)
     .join(', ');
 
+  const isPersonalDelivery =
+    order.deliveryMethod === 'personal_cdmx_edomex' ||
+    order.shippingStreet.includes('Entrega Personal');
+
+  const deliveryLines = isPersonalDelivery
+    ? [
+        `*Modalidad de Entrega:* Entrega Personal (Solo Estado de México y CDMX · A acordar vía WhatsApp)`,
+        `Recibe: ${order.recipientName} (${order.recipientPhone})`,
+        `Zona / Alcaldía o Municipio: ${order.shippingCityState}`,
+        order.shippingNotes
+          ? `Punto u horario sugerido: ${order.shippingNotes}`
+          : '',
+      ]
+    : [
+        `*Modalidad de Entrega:* Envío por Paquetería a toda la República (A acordar vía WhatsApp)`,
+        `Recibe: ${order.recipientName} (${order.recipientPhone})`,
+        `Dirección: ${order.shippingStreet}, Col. ${order.shippingColony}, C.P. ${order.shippingPostalCode}, ${order.shippingCityState}`,
+        order.shippingNotes ? `Referencias: ${order.shippingNotes}` : '',
+      ];
+
   const messageLines = [
-    `Hola *Biker Safe*, acabo de registrar mi pedido de Stickers NFC y adjunto mis datos para confirmar el pago por transferencia SPEI:`,
+    `Hola *Biker Safe*, acabo de registrar mi pedido de Stickers NFC y me comunico para enviar mi comprobante SPEI y acordar la entrega por WhatsApp:`,
     ``,
     `*Folio de Pedido:* ${order.orderId.toUpperCase()}`,
     `*ID Tag NFC:* ${order.tagId}`,
     `*Perfil Biker:* ${order.riderName}`,
     `*Paquete:* ${order.pkgName} (${order.stickerCount} ${order.stickerCount === 1 ? 'sticker' : 'stickers'})`,
     `*Colores elegidos:* ${colorsBreakdown}`,
-    `*Total a transferir:* $${order.totalPrice} MXN`,
+    `*Total del paquete:* $${order.totalPrice} MXN`,
     ``,
-    `*Datos de Envío:*`,
-    `Recibe: ${order.recipientName} (${order.recipientPhone})`,
-    `Dirección: ${order.shippingStreet}, Col. ${order.shippingColony}, C.P. ${order.shippingPostalCode}, ${order.shippingCityState}`,
-    order.shippingNotes ? `Referencias: ${order.shippingNotes}` : '',
+    ...deliveryLines,
     ``,
-    `Enseguida envío mi comprobante de pago SPEI.`,
+    `Enseguida envío mi comprobante de pago SPEI para ponernos de acuerdo con la entrega.`,
   ].filter(Boolean);
 
   const encodedText = encodeURIComponent(messageLines.join('\n'));
@@ -315,7 +347,7 @@ export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
     name: 'Kit Individual Casco NFC',
     subtitle: 'Para 1 casco principal',
     price: 249,
-    specs: '1 Sticker NFC NTAG213 · Acabado Resina 3M IP68',
+    specs: '1 Sticker NFC de emergencia · Color elegible',
     stickerCount: 1,
     availableColors: [...ALL_STICKER_COLORS],
     sortOrder: 1,
@@ -335,7 +367,7 @@ export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
     name: 'Kit Dúo / Rodada',
     subtitle: 'Cobertura en múltiples cascos',
     price: 649,
-    specs: '4 Stickers NFC NTAG215 Programados con tu perfil médico',
+    specs: '4 Stickers NFC programados con tu perfil médico',
     stickerCount: 4,
     availableColors: [...ALL_STICKER_COLORS],
     sortOrder: 3,
@@ -357,12 +389,19 @@ export function normalizePackageOption(
       )
     : [];
 
+  let cleanedSpecs = raw.specs || fallback.specs;
+  if (
+    /NTAG213|NTAG215|Resina Epóxica 3M|Acabado Resina 3M/i.test(cleanedSpecs)
+  ) {
+    cleanedSpecs = fallback.specs;
+  }
+
   return {
     pkgId: raw.pkgId || fallback.pkgId,
     name: raw.name || fallback.name,
     subtitle: raw.subtitle || fallback.subtitle,
     price: typeof raw.price === 'number' && raw.price >= 1 ? raw.price : fallback.price,
-    specs: raw.specs || fallback.specs,
+    specs: cleanedSpecs,
     stickerCount:
       typeof raw.stickerCount === 'number' &&
       raw.stickerCount >= 1 &&

@@ -1,0 +1,6 @@
+{
+  "name": "MiSafeMoto — Sistema de Emergencia Médica NFC",
+  "description": "Plataforma de identificación médica de emergencia mediante stickers NFC con autenticación segura para motociclistas y servicios paramédicos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

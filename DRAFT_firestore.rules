@@ -1,0 +1,304 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Hardened Global Helpers
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidTagId(id) {
+      return id is string && id.size() >= 4 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'gami.rodrigo@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // =========================================================================
+    // Validation Blueprints (Anti-Update-Gap)
+    // =========================================================================
+    function isValidUserPrivateInfo(data) {
+      return data.keys().hasAll([
+        'ownerId',
+        'displayName',
+        'email',
+        'personalPhone',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId',
+        'displayName',
+        'email',
+        'personalPhone',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.ownerId == request.auth.uid &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+      data.email is string && data.email.size() >= 3 && data.email.size() <= 150 &&
+      data.personalPhone is string && data.personalPhone.size() >= 0 && data.personalPhone.size() <= 30 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidEmergencySticker(data) {
+      return data.keys().hasAll([
+        'tagId',
+        'ownerId',
+        'fullName',
+        'bloodType',
+        'allergies',
+        'medicalConditions',
+        'emergencyContactName',
+        'emergencyContactPhone',
+        'secondaryContactName',
+        'secondaryContactPhone',
+        'motorcycleDetails',
+        'insuranceDetails',
+        'organDonor',
+        'isActive',
+        'accessPin',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'tagId',
+        'ownerId',
+        'fullName',
+        'bloodType',
+        'allergies',
+        'medicalConditions',
+        'emergencyContactName',
+        'emergencyContactPhone',
+        'secondaryContactName',
+        'secondaryContactPhone',
+        'motorcycleDetails',
+        'insuranceDetails',
+        'organDonor',
+        'isActive',
+        'accessPin',
+        'createdAt',
+        'updatedAt'
+      ]) &&
+      data.tagId is string && data.tagId.size() >= 4 && data.tagId.size() <= 64 && data.tagId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 && data.ownerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.ownerId == request.auth.uid &&
+      data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+      data.bloodType is string && data.bloodType.size() >= 2 && data.bloodType.size() <= 15 &&
+      data.bloodType in ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'Desconocido'] &&
+      data.allergies is string && data.allergies.size() >= 0 && data.allergies.size() <= 500 &&
+      data.medicalConditions is string && data.medicalConditions.size() >= 0 && data.medicalConditions.size() <= 1000 &&
+      data.emergencyContactName is string && data.emergencyContactName.size() >= 2 && data.emergencyContactName.size() <= 100 &&
+      data.emergencyContactPhone is string && data.emergencyContactPhone.size() >= 5 && data.emergencyContactPhone.size() <= 30 && data.emergencyContactPhone.matches('^[0-9+\\-()\\s]+$') &&
+      data.secondaryContactName is string && data.secondaryContactName.size() >= 0 && data.secondaryContactName.size() <= 100 &&
+      data.secondaryContactPhone is string && data.secondaryContactPhone.size() >= 0 && data.secondaryContactPhone.size() <= 30 && (data.secondaryContactPhone.size() == 0 || data.secondaryContactPhone.matches('^[0-9+\\-()\\s]+$')) &&
+      data.motorcycleDetails is string && data.motorcycleDetails.size() >= 0 && data.motorcycleDetails.size() <= 150 &&
+      data.insuranceDetails is string && data.insuranceDetails.size() >= 0 && data.insuranceDetails.size() <= 150 &&
+      data.organDonor is bool &&
+      data.isActive is bool &&
+      data.accessPin is string && data.accessPin.size() >= 0 && data.accessPin.size() <= 10 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidScanLog(data) {
+      return data.keys().hasAll([
+        'scanId',
+        'tagId',
+        'stickerOwnerId',
+        'scannerUid',
+        'scannerLabel',
+        'scanMethod',
+        'locationNote',
+        'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'scanId',
+        'tagId',
+        'stickerOwnerId',
+        'scannerUid',
+        'scannerLabel',
+        'scanMethod',
+        'locationNote',
+        'createdAt'
+      ]) &&
+      data.scanId is string && data.scanId.size() >= 4 && data.scanId.size() <= 64 && data.scanId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.tagId is string && data.tagId.size() >= 4 && data.tagId.size() <= 64 && data.tagId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.stickerOwnerId is string && data.stickerOwnerId.size() >= 1 && data.stickerOwnerId.size() <= 128 && data.stickerOwnerId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.scannerUid is string && data.scannerUid.size() >= 1 && data.scannerUid.size() <= 128 && data.scannerUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.scannerUid == request.auth.uid &&
+      data.scannerLabel is string && data.scannerLabel.size() >= 1 && data.scannerLabel.size() <= 120 &&
+      data.scanMethod is string && data.scanMethod.size() >= 6 && data.scanMethod.size() <= 20 &&
+      data.scanMethod in ['NFC_TAG', 'QR_CODE', 'DIRECT_URL', 'SIMULATOR'] &&
+      data.locationNote is string && data.locationNote.size() >= 0 && data.locationNote.size() <= 200 &&
+      data.createdAt is timestamp;
+    }
+
+    // =========================================================================
+    // Collection 1: /users/{userId}/private/{docId} (PII Split Collection)
+    // =========================================================================
+    match /users/{userId}/private/{docId} {
+      allow get: if isVerifiedUser() && isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+      allow list: if isVerifiedUser() && isValidId(userId) && (existing().ownerId == request.auth.uid || isAdmin());
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidId(docId) &&
+        docId == 'info' &&
+        isOwner(userId) &&
+        isValidUserPrivateInfo(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidId(docId) &&
+        isValidUserPrivateInfo(incoming()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'personalPhone', 'updatedAt']))
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+    }
+
+    // =========================================================================
+    // Collection 2: /stickers/{tagId} (Emergency Medical NFC Stickers)
+    // =========================================================================
+    match /stickers/{tagId} {
+      // Single-document lookup via unique physical NFC tagId works as a direct emergency landing page without login walls
+      allow get: if isValidTagId(tagId) && (
+        existing().isActive == true ||
+        (isVerifiedUser() && existing().ownerId == request.auth.uid) ||
+        isAdmin()
+      );
+
+      // List queries strictly enforced against resource.data.ownerId to block scraping
+      allow list: if isVerifiedUser() && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow create: if isVerifiedUser() &&
+        isValidTagId(tagId) &&
+        isValidEmergencySticker(incoming()) &&
+        incoming().tagId == tagId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidTagId(tagId) &&
+        isValidEmergencySticker(incoming()) &&
+        incoming().tagId == existing().tagId &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          // Action 1: Full medical profile update by sticker owner
+          (existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'fullName',
+              'bloodType',
+              'allergies',
+              'medicalConditions',
+              'emergencyContactName',
+              'emergencyContactPhone',
+              'secondaryContactName',
+              'secondaryContactPhone',
+              'motorcycleDetails',
+              'insuranceDetails',
+              'organDonor',
+              'isActive',
+              'accessPin',
+              'updatedAt'
+            ])
+          ) ||
+          // Action 2: Status toggle by sticker owner
+          (existing().ownerId == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'isActive',
+              'secondaryContactName',
+              'secondaryContactPhone',
+              'updatedAt'
+            ])
+          )
+        );
+
+      allow delete: if isVerifiedUser() && isValidTagId(tagId) && (
+        existing().ownerId == request.auth.uid ||
+        isAdmin()
+      );
+
+      // =======================================================================
+      // Sub-collection 3: /stickers/{tagId}/scans/{scanId} (Audit Logs)
+      // =======================================================================
+      match /scans/{scanId} {
+        allow get: if isVerifiedUser() && isValidTagId(tagId) && isValidTagId(scanId) && (
+          existing().stickerOwnerId == request.auth.uid ||
+          existing().scannerUid == request.auth.uid ||
+          isAdmin()
+        );
+
+        allow list: if isVerifiedUser() && isValidTagId(tagId) && (
+          existing().stickerOwnerId == request.auth.uid ||
+          isAdmin()
+        );
+
+        allow create: if isVerifiedUser() &&
+          isValidTagId(tagId) &&
+          isValidTagId(scanId) &&
+          isValidScanLog(incoming()) &&
+          incoming().scanId == scanId &&
+          incoming().tagId == tagId &&
+          incoming().createdAt == request.time &&
+          // Master Gate relational check against parent sticker
+          exists(/databases/$(database)/documents/stickers/$(tagId)) &&
+          get(/databases/$(database)/documents/stickers/$(tagId)).data.isActive == true &&
+          incoming().stickerOwnerId == get(/databases/$(database)/documents/stickers/$(tagId)).data.ownerId;
+
+        // Audit logs are immutable once recorded
+        allow update: if false;
+
+        allow delete: if isVerifiedUser() && isValidTagId(tagId) && isValidTagId(scanId) && (
+          existing().stickerOwnerId == request.auth.uid ||
+          isAdmin()
+        );
+      }
+    }
+  }
+}

@@ -1,0 +1,388 @@
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut as firebaseSignOut,
+  User,
+} from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  getDocFromServer,
+  setDoc,
+  serverTimestamp,
+  Timestamp,
+} from 'firebase/firestore';
+import firebaseConfig from '../../firebase-applet-config.json';
+
+const app = initializeApp(firebaseConfig);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const auth = getAuth(app);
+export const googleProvider = new GoogleAuthProvider();
+
+// Validate Connection to Firestore on boot
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error('Please check your Firebase configuration.');
+    }
+  }
+}
+testConnection();
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+// ============================================================================
+// Schema Constants Synchronized Verbatim with firebase-blueprint.json
+// ============================================================================
+export const BLOOD_TYPES = [
+  'O+',
+  'O-',
+  'A+',
+  'A-',
+  'B+',
+  'B-',
+  'AB+',
+  'AB-',
+  'Desconocido',
+] as const;
+
+export type BloodType = (typeof BLOOD_TYPES)[number];
+
+export const SCAN_METHODS = [
+  'NFC_TAG',
+  'QR_CODE',
+  'DIRECT_URL',
+  'SIMULATOR',
+] as const;
+
+export type ScanMethod = (typeof SCAN_METHODS)[number];
+
+export const SCHEMA_CONSTRAINTS = {
+  idPattern: /^[a-zA-Z0-9_\-]+$/,
+  phonePattern: /^[0-9+\-()\s]+$/,
+  tagId: { minLength: 4, maxLength: 64 },
+  ownerId: { minLength: 1, maxLength: 128 },
+  fullName: { minLength: 2, maxLength: 100 },
+  bloodType: { minLength: 2, maxLength: 15 },
+  allergies: { minLength: 0, maxLength: 500 },
+  medicalConditions: { minLength: 0, maxLength: 1000 },
+  emergencyContactName: { minLength: 2, maxLength: 100 },
+  emergencyContactPhone: { minLength: 5, maxLength: 30 },
+  secondaryContactName: { minLength: 0, maxLength: 100 },
+  secondaryContactPhone: { minLength: 0, maxLength: 30 },
+  motorcycleDetails: { minLength: 0, maxLength: 150 },
+  insuranceDetails: { minLength: 0, maxLength: 150 },
+  accessPin: { minLength: 0, maxLength: 10 },
+  scannerLabel: { minLength: 1, maxLength: 120 },
+  locationNote: { minLength: 0, maxLength: 200 },
+} as const;
+
+export interface EmergencyStickerRecord {
+  tagId: string;
+  ownerId: string;
+  fullName: string;
+  bloodType: BloodType;
+  allergies: string;
+  medicalConditions: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  secondaryContactName: string;
+  secondaryContactPhone: string;
+  motorcycleDetails: string;
+  insuranceDetails: string;
+  organDonor: boolean;
+  isActive: boolean;
+  accessPin: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface ScanLogRecord {
+  scanId: string;
+  tagId: string;
+  stickerOwnerId: string;
+  scannerUid: string;
+  scannerLabel: string;
+  scanMethod: ScanMethod;
+  locationNote: string;
+  createdAt?: Timestamp | null;
+}
+
+export function generateUniqueTagId(): string {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let token = 'msm-';
+  const randomValues = new Uint32Array(8);
+  window.crypto.getRandomValues(randomValues);
+  for (let i = 0; i < 8; i++) {
+    token += chars[randomValues[i] % chars.length];
+  }
+  return token;
+}
+
+export function generateUniqueScanId(): string {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let token = 'scan-';
+  const randomValues = new Uint32Array(8);
+  window.crypto.getRandomValues(randomValues);
+  for (let i = 0; i < 8; i++) {
+    token += chars[randomValues[i] % chars.length];
+  }
+  return token;
+}
+
+export function sanitizeAndValidateStickerInput(input: {
+  tagId: string;
+  ownerId: string;
+  fullName: string;
+  bloodType: string;
+  allergies: string;
+  medicalConditions: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  secondaryContactName: string;
+  secondaryContactPhone: string;
+  motorcycleDetails: string;
+  insuranceDetails: string;
+  organDonor: boolean;
+  isActive: boolean;
+  accessPin: string;
+}): { valid: true; data: Omit<EmergencyStickerRecord, 'createdAt' | 'updatedAt'> } | { valid: false; error: string } {
+  const tagId = input.tagId.trim().slice(0, SCHEMA_CONSTRAINTS.tagId.maxLength);
+  if (
+    tagId.length < SCHEMA_CONSTRAINTS.tagId.minLength ||
+    !SCHEMA_CONSTRAINTS.idPattern.test(tagId)
+  ) {
+    return { valid: false, error: 'El identificador del tag NFC no es válido.' };
+  }
+
+  const ownerId = input.ownerId.trim().slice(0, SCHEMA_CONSTRAINTS.ownerId.maxLength);
+  if (
+    ownerId.length < SCHEMA_CONSTRAINTS.ownerId.minLength ||
+    !SCHEMA_CONSTRAINTS.idPattern.test(ownerId)
+  ) {
+    return { valid: false, error: 'Sesión de usuario inválida.' };
+  }
+
+  const fullName = input.fullName.trim().slice(0, SCHEMA_CONSTRAINTS.fullName.maxLength);
+  if (fullName.length < SCHEMA_CONSTRAINTS.fullName.minLength) {
+    return { valid: false, error: 'Por favor ingresa el nombre completo (mínimo 2 caracteres).' };
+  }
+
+  const bloodType = (BLOOD_TYPES.includes(input.bloodType as BloodType)
+    ? input.bloodType
+    : '') as BloodType;
+  if (!bloodType) {
+    return { valid: false, error: 'Por favor selecciona un tipo de sangre válido.' };
+  }
+
+  const allergies = input.allergies.trim().slice(0, SCHEMA_CONSTRAINTS.allergies.maxLength);
+  const medicalConditions = input.medicalConditions
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.medicalConditions.maxLength);
+
+  const emergencyContactName = input.emergencyContactName
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.emergencyContactName.maxLength);
+  if (emergencyContactName.length < SCHEMA_CONSTRAINTS.emergencyContactName.minLength) {
+    return {
+      valid: false,
+      error: 'Por favor ingresa el nombre del contacto de emergencia principal.',
+    };
+  }
+
+  const emergencyContactPhone = input.emergencyContactPhone
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.emergencyContactPhone.maxLength);
+  if (
+    emergencyContactPhone.length < SCHEMA_CONSTRAINTS.emergencyContactPhone.minLength ||
+    !SCHEMA_CONSTRAINTS.phonePattern.test(emergencyContactPhone)
+  ) {
+    return {
+      valid: false,
+      error:
+        'Por favor ingresa un teléfono de emergencia principal válido (solo dígitos, +, -, espacios o paréntesis).',
+    };
+  }
+
+  const secondaryContactName = input.secondaryContactName
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.secondaryContactName.maxLength);
+
+  const secondaryContactPhone = input.secondaryContactPhone
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.secondaryContactPhone.maxLength);
+
+  if (
+    secondaryContactPhone.length > 0 &&
+    (secondaryContactPhone.length < 5 || !SCHEMA_CONSTRAINTS.phonePattern.test(secondaryContactPhone))
+  ) {
+    return {
+      valid: false,
+      error:
+        'Por favor ingresa un teléfono válido para el segundo contacto de emergencia o déjalo en blanco.',
+    };
+  }
+
+  const motorcycleDetails = input.motorcycleDetails
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.motorcycleDetails.maxLength);
+  const insuranceDetails = input.insuranceDetails
+    .trim()
+    .slice(0, SCHEMA_CONSTRAINTS.insuranceDetails.maxLength);
+  const accessPin = input.accessPin
+    .trim()
+    .replace(/[^0-9a-zA-Z]/g, '')
+    .slice(0, SCHEMA_CONSTRAINTS.accessPin.maxLength);
+
+  return {
+    valid: true,
+    data: {
+      tagId,
+      ownerId,
+      fullName,
+      bloodType,
+      allergies,
+      medicalConditions,
+      emergencyContactName,
+      emergencyContactPhone,
+      secondaryContactName,
+      secondaryContactPhone,
+      motorcycleDetails,
+      insuranceDetails,
+      organDonor: Boolean(input.organDonor),
+      isActive: Boolean(input.isActive),
+      accessPin,
+    },
+  };
+}
+
+export function buildUniqueStickerUrl(sticker: Omit<EmergencyStickerRecord, 'createdAt' | 'updatedAt'>): string {
+  const baseUrl = window.location.origin + window.location.pathname;
+  const compactPayload = {
+    t: sticker.tagId,
+    n: sticker.fullName,
+    b: sticker.bloodType,
+    a: sticker.allergies,
+    m: sticker.medicalConditions,
+    cn: sticker.emergencyContactName,
+    cp: sticker.emergencyContactPhone,
+    scn: sticker.secondaryContactName || '',
+    scp: sticker.secondaryContactPhone || '',
+    mc: sticker.motorcycleDetails,
+    ins: sticker.insuranceDetails,
+    od: sticker.organDonor ? 1 : 0,
+    pin: sticker.accessPin ? 1 : 0,
+  };
+  const encoded = btoa(encodeURIComponent(JSON.stringify(compactPayload)));
+  return `${baseUrl}?tag=${encodeURIComponent(sticker.tagId)}&p=${encodeURIComponent(encoded)}`;
+}
+
+export function parseEncodedStickerPacket(encoded: string | null): Partial<EmergencyStickerRecord> | null {
+  if (!encoded) return null;
+  try {
+    const jsonStr = decodeURIComponent(atob(encoded));
+    const parsed = JSON.parse(jsonStr);
+    return {
+      tagId: typeof parsed.t === 'string' ? parsed.t : '',
+      fullName: typeof parsed.n === 'string' ? parsed.n : '',
+      bloodType: BLOOD_TYPES.includes(parsed.b) ? parsed.b : 'Desconocido',
+      allergies: typeof parsed.a === 'string' ? parsed.a : '',
+      medicalConditions: typeof parsed.m === 'string' ? parsed.m : '',
+      emergencyContactName: typeof parsed.cn === 'string' ? parsed.cn : '',
+      emergencyContactPhone: typeof parsed.cp === 'string' ? parsed.cp : '',
+      secondaryContactName: typeof parsed.scn === 'string' ? parsed.scn : '',
+      secondaryContactPhone: typeof parsed.scp === 'string' ? parsed.scp : '',
+      motorcycleDetails: typeof parsed.mc === 'string' ? parsed.mc : '',
+      insuranceDetails: typeof parsed.ins === 'string' ? parsed.ins : '',
+      organDonor: parsed.od === 1,
+      isActive: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function syncUserPrivateProfile(user: User): Promise<void> {
+  if (!user.emailVerified) return;
+  const path = `users/${user.uid}/private/info`;
+  try {
+    await setDoc(
+      doc(db, 'users', user.uid, 'private', 'info'),
+      {
+        ownerId: user.uid,
+        displayName: (user.displayName || 'Usuario Biker Safe').slice(0, 100),
+        email: (user.email || 'usuario@bikersafe.mx').slice(0, 150),
+        personalPhone: (user.phoneNumber || '').slice(0, 30),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: false }
+    );
+  } catch {
+    // Profile may already exist; ignore non-critical sync overwrite error
+  }
+}
+
+export async function signInWithGoogle(): Promise<User> {
+  const result = await signInWithPopup(auth, googleProvider);
+  await syncUserPrivateProfile(result.user);
+  return result.user;
+}
+
+export async function signOutUser(): Promise<void> {
+  await firebaseSignOut(auth);
+}

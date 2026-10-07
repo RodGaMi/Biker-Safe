@@ -1,0 +1,879 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import {
+  collection,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  onSnapshot,
+  query,
+  where,
+  serverTimestamp,
+} from 'firebase/firestore';
+import {
+  PhoneCall,
+  ChevronDown,
+  ChevronUp,
+  LogOut,
+  LogIn,
+  AlertCircle,
+  CheckCircle2,
+  ShoppingBag,
+  ExternalLink,
+  ShieldCheck,
+  UserCheck,
+} from 'lucide-react';
+import {
+  auth,
+  db,
+  signInWithGoogle,
+  signOutUser,
+  OperationType,
+  handleFirestoreError,
+  BLOOD_TYPES,
+  EmergencyStickerRecord,
+  generateUniqueTagId,
+  sanitizeAndValidateStickerInput,
+  parseEncodedStickerPacket,
+} from './lib/firebase';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import {
+  PublicEmergencyLandingPage,
+  StickerPurchaseSection,
+} from './components/EmergencyViews';
+
+type ViewMode = 'main' | 'public_landing';
+type MainStep = 'profile_form' | 'sticker_checkout';
+
+function MotorcycleBrandIcon() {
+  return (
+    <svg
+      viewBox="0 0 28 20"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className="w-7 h-5 text-orange-500 shrink-0"
+      aria-hidden="true"
+    >
+      <circle cx="5.5" cy="14.5" r="3.5" stroke="currentColor" strokeWidth="2.2" />
+      <circle cx="22.5" cy="14.5" r="3.5" stroke="currentColor" strokeWidth="2.2" />
+      <path
+        d="M5.5 14.5L10 8H16.5L19.5 14.5M10 8L13 14.5H19.5M15 4.5H18.5L22.5 14.5"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function BikerSafeApp() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  // Navigation mode: 'main' (Pantalla Principal: Perfil Seguro + Compra de Sticker) or 'public_landing' (Landing Page del Tag NFC)
+  const [viewMode, setViewMode] = useState<ViewMode>('main');
+  const [mainStep, setMainStep] = useState<MainStep>('profile_form');
+
+  // Form states for user's medical emergency profile
+  const [currentTagId, setCurrentTagId] = useState<string | null>(null);
+  const [fullName, setFullName] = useState('');
+  const [bloodType, setBloodType] = useState('');
+  const [allergies, setAllergies] = useState('');
+  const [medicalConditions, setMedicalConditions] = useState('');
+  const [emergencyContactName, setEmergencyContactName] = useState('');
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
+  const [secondaryContactName, setSecondaryContactName] = useState('');
+  const [secondaryContactPhone, setSecondaryContactPhone] = useState('');
+  const [motorcycleDetails, setMotorcycleDetails] = useState('');
+  const [insuranceDetails, setInsuranceDetails] = useState('');
+  const [organDonor, setOrganDonor] = useState(false);
+  const [showAdvancedFields, setShowAdvancedFields] = useState(false);
+
+  // Submission & Feedback state
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saveSuccessBanner, setSaveSuccessBanner] = useState(false);
+
+  // Saved sticker record for the authenticated user
+  const [userSticker, setUserSticker] = useState<EmergencyStickerRecord | null>(
+    null
+  );
+  const [hasPopulatedInitialForm, setHasPopulatedInitialForm] = useState(false);
+
+  // Public NFC Landing Page state (when opened via ?tag=... or previewed)
+  const [landingTagId, setLandingTagId] = useState('');
+  const [landingSticker, setLandingSticker] =
+    useState<EmergencyStickerRecord | null>(null);
+  const [loadingLandingSticker, setLoadingLandingSticker] = useState(false);
+
+  // 1. Track Firebase Authentication State
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthReady(true);
+      if (!currentUser) {
+        setUserSticker(null);
+        setHasPopulatedInitialForm(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Inspect URL parameters on boot for direct NFC Tag Scan (?tag=msm-xxxx&p=...)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tagParam = params.get('tag');
+    const encodedPacket = params.get('p');
+
+    if (tagParam) {
+      setLandingTagId(tagParam);
+      setViewMode('public_landing');
+
+      const fallbackData = parseEncodedStickerPacket(encodedPacket);
+      if (fallbackData && fallbackData.tagId) {
+        setLandingSticker({
+          tagId: fallbackData.tagId,
+          ownerId: '',
+          fullName: fallbackData.fullName || 'Motociclista Registrado',
+          bloodType: fallbackData.bloodType || 'Desconocido',
+          allergies: fallbackData.allergies || '',
+          medicalConditions: fallbackData.medicalConditions || '',
+          emergencyContactName: fallbackData.emergencyContactName || '',
+          emergencyContactPhone: fallbackData.emergencyContactPhone || '',
+          secondaryContactName: fallbackData.secondaryContactName || '',
+          secondaryContactPhone: fallbackData.secondaryContactPhone || '',
+          motorcycleDetails: fallbackData.motorcycleDetails || '',
+          insuranceDetails: fallbackData.insuranceDetails || '',
+          organDonor: Boolean(fallbackData.organDonor),
+          isActive: true,
+          accessPin: '',
+        });
+      }
+    }
+  }, []);
+
+  // 3. Fetch public sticker from Firestore whenever landingTagId is active (works without login!)
+  useEffect(() => {
+    const cleanId = landingTagId.trim();
+    if (cleanId.length < 4) return;
+
+    let cancelled = false;
+    async function fetchPublicSticker() {
+      setLoadingLandingSticker(true);
+      try {
+        const snap = await getDoc(doc(db, 'stickers', cleanId));
+        if (!cancelled && snap.exists()) {
+          const data = snap.data() as EmergencyStickerRecord;
+          setLandingSticker({
+            ...data,
+            secondaryContactName: data.secondaryContactName || '',
+            secondaryContactPhone: data.secondaryContactPhone || '',
+          });
+        }
+      } catch {
+        // Fallback packet in URL will still display if offline or restricted
+      } finally {
+        if (!cancelled) {
+          setLoadingLandingSticker(false);
+        }
+      }
+    }
+
+    fetchPublicSticker();
+    return () => {
+      cancelled = true;
+    };
+  }, [landingTagId]);
+
+  // 4. Subscribe to the authenticated user's profile in Firestore so they can modify their data anytime
+  useEffect(() => {
+    if (!authReady || !user) return;
+
+    const stickersQuery = query(
+      collection(db, 'stickers'),
+      where('ownerId', '==', user.uid)
+    );
+
+    const unsubscribe = onSnapshot(
+      stickersQuery,
+      (snapshot) => {
+        const records: EmergencyStickerRecord[] = [];
+        snapshot.forEach((docSnap) => {
+          const raw = docSnap.data() as EmergencyStickerRecord;
+          records.push({
+            ...raw,
+            secondaryContactName: raw.secondaryContactName || '',
+            secondaryContactPhone: raw.secondaryContactPhone || '',
+          });
+        });
+
+        if (records.length > 0) {
+          const primaryRecord = records[0];
+          setUserSticker(primaryRecord);
+          setCurrentTagId(primaryRecord.tagId);
+
+          if (!hasPopulatedInitialForm) {
+            setFullName(primaryRecord.fullName);
+            setBloodType(primaryRecord.bloodType);
+            setAllergies(primaryRecord.allergies);
+            setMedicalConditions(primaryRecord.medicalConditions);
+            setEmergencyContactName(primaryRecord.emergencyContactName);
+            setEmergencyContactPhone(primaryRecord.emergencyContactPhone);
+            setSecondaryContactName(primaryRecord.secondaryContactName || '');
+            setSecondaryContactPhone(primaryRecord.secondaryContactPhone || '');
+            setMotorcycleDetails(primaryRecord.motorcycleDetails || '');
+            setInsuranceDetails(primaryRecord.insuranceDetails || '');
+            setOrganDonor(Boolean(primaryRecord.organDonor));
+            setHasPopulatedInitialForm(true);
+          }
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.LIST, 'stickers');
+      }
+    );
+
+    return () => unsubscribe();
+  }, [authReady, user, hasPopulatedInitialForm]);
+
+  const handleGoogleSignIn = async () => {
+    setFormError(null);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      setFormError(
+        err instanceof Error
+          ? `Error al iniciar sesión: ${err.message}`
+          : 'No se pudo completar la autenticación.'
+      );
+    }
+  };
+
+  const handleLoadSampleData = () => {
+    setFullName('Miguel Ángel Rojas');
+    setBloodType('O+');
+    setAllergies('Penicilina, Látex');
+    setMedicalConditions('Asma controlada, Tomo salbutamol en inhalador');
+    setEmergencyContactName('María (Esposa)');
+    setEmergencyContactPhone('+52 55 1234 5678');
+    setSecondaryContactName('Carlos Rojas (Hermano)');
+    setSecondaryContactPhone('+52 55 8765 4321');
+    setMotorcycleDetails('Yamaha MT-07 Gris · Casco AGV K6');
+    setInsuranceDetails('GNP Seguros Póliza #MX-994120');
+    setOrganDonor(true);
+    setFormError(null);
+  };
+
+  const handleSubmitProfileForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    setSaveSuccessBanner(false);
+
+    let activeUser = user;
+    if (!activeUser) {
+      try {
+        activeUser = await signInWithGoogle();
+      } catch {
+        setFormError(
+          'Inicia sesión con tu cuenta segura para guardar tu perfil médico y vincular tu Sticker NFC.'
+        );
+        return;
+      }
+    }
+
+    const isUpdatingExisting = Boolean(currentTagId && userSticker);
+    const targetTagId = currentTagId || generateUniqueTagId();
+
+    const validation = sanitizeAndValidateStickerInput({
+      tagId: targetTagId,
+      ownerId: activeUser.uid,
+      fullName,
+      bloodType,
+      allergies,
+      medicalConditions,
+      emergencyContactName,
+      emergencyContactPhone,
+      secondaryContactName,
+      secondaryContactPhone,
+      motorcycleDetails,
+      insuranceDetails,
+      organDonor,
+      isActive: true,
+      accessPin: '',
+    });
+
+    if (validation.valid === false) {
+      setFormError(validation.error);
+      return;
+    }
+
+    setSubmitting(true);
+    const docPath = `stickers/${targetTagId}`;
+
+    try {
+      if (isUpdatingExisting) {
+        await updateDoc(doc(db, 'stickers', targetTagId), {
+          fullName: validation.data.fullName,
+          bloodType: validation.data.bloodType,
+          allergies: validation.data.allergies,
+          medicalConditions: validation.data.medicalConditions,
+          emergencyContactName: validation.data.emergencyContactName,
+          emergencyContactPhone: validation.data.emergencyContactPhone,
+          secondaryContactName: validation.data.secondaryContactName,
+          secondaryContactPhone: validation.data.secondaryContactPhone,
+          motorcycleDetails: validation.data.motorcycleDetails,
+          insuranceDetails: validation.data.insuranceDetails,
+          organDonor: validation.data.organDonor,
+          isActive: true,
+          accessPin: '',
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(doc(db, 'stickers', targetTagId), {
+          ...validation.data,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      setUserSticker(validation.data);
+      setCurrentTagId(validation.data.tagId);
+      setLandingSticker(validation.data);
+      setLandingTagId(validation.data.tagId);
+      setSaveSuccessBanner(true);
+
+      // Once generated/updated, advance to the custom NFC Sticker purchase step
+      setMainStep('sticker_checkout');
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        isUpdatingExisting ? OperationType.UPDATE : OperationType.CREATE,
+        docPath
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col bg-[#0B0C0E] text-zinc-100">
+      {/* Top Bar Contract: Brand — Single Main Screen Link — User Auth Action */}
+      <header className="bg-[#08090B] text-white border-b border-zinc-800/90">
+        <div className="max-w-6xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-4">
+          {/* Zone 1: Brand Wordmark */}
+          <a
+            href="#inicio"
+            onClick={(e) => {
+              e.preventDefault();
+              setViewMode('main');
+              setMainStep('profile_form');
+            }}
+            className="inline-flex items-center gap-2.5 text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0"
+          >
+            <MotorcycleBrandIcon />
+            <span>Biker Safe</span>
+          </a>
+
+          {/* Zone 2: Only Main Screen in Menu */}
+          <nav className="flex items-center gap-6 text-sm font-medium">
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('main');
+              }}
+              className={`py-1 transition-colors whitespace-nowrap cursor-pointer ${
+                viewMode === 'main'
+                  ? 'text-orange-500 border-b-2 border-orange-500 font-bold'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Pantalla Principal
+            </button>
+          </nav>
+
+          {/* Zone 3: User Account Action */}
+          <div className="flex items-center gap-3">
+            {user ? (
+              <div className="flex items-center gap-3">
+                <span className="hidden sm:inline text-xs text-zinc-400 truncate max-w-[180px]">
+                  {user.displayName || user.email}
+                </span>
+                <button
+                  type="button"
+                  onClick={signOutUser}
+                  className="inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-semibold text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-orange-500" />
+                  <span>Cerrar Sesión</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-black bg-orange-500 hover:bg-orange-400 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Iniciar Sesión Segura</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-10">
+        {viewMode === 'public_landing' ? (
+          <PublicEmergencyLandingPage
+            sticker={landingSticker || userSticker}
+            loading={loadingLandingSticker}
+            isOwnerViewing={Boolean(
+              user &&
+                (landingSticker?.ownerId === user.uid ||
+                  userSticker?.ownerId === user.uid)
+            )}
+            onBackToMainScreen={() => {
+              setViewMode('main');
+            }}
+          />
+        ) : (
+          <div className="space-y-8">
+            {/* Step Progress & Mode Switcher inside Pantalla Principal */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#14161A] border border-zinc-800 rounded-xl p-4">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMainStep('profile_form')}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                    mainStep === 'profile_form'
+                      ? 'bg-orange-500 text-black'
+                      : 'bg-zinc-800/80 text-zinc-300 hover:text-white'
+                  }`}
+                >
+                  1. Mis Datos Médicos (Perfil Seguro)
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!userSticker}
+                  onClick={() => {
+                    if (userSticker) setMainStep('sticker_checkout');
+                  }}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors ${
+                    !userSticker
+                      ? 'bg-zinc-900 text-zinc-600 cursor-not-allowed'
+                      : mainStep === 'sticker_checkout'
+                      ? 'bg-orange-500 text-black cursor-pointer'
+                      : 'bg-zinc-800/80 text-zinc-300 hover:text-white cursor-pointer'
+                  }`}
+                >
+                  2. Compra de Sticker NFC Personalizado
+                </button>
+              </div>
+
+              {userSticker && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLandingSticker(userSticker);
+                    setLandingTagId(userSticker.tagId);
+                    setViewMode('public_landing');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-orange-400 text-xs font-bold rounded-lg transition-colors cursor-pointer self-start sm:self-auto"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Ver mi Landing Page NFC ({userSticker.tagId})</span>
+                </button>
+              )}
+            </div>
+
+            {mainStep === 'sticker_checkout' && userSticker ? (
+              <StickerPurchaseSection
+                sticker={userSticker}
+                onOpenPublicLanding={() => {
+                  setLandingSticker(userSticker);
+                  setLandingTagId(userSticker.tagId);
+                  setViewMode('public_landing');
+                }}
+                onEditProfile={() => setMainStep('profile_form')}
+              />
+            ) : (
+              /* Step 1: Secure User Profile Form (Create & Modify anytime) */
+              <div className="max-w-3xl mx-auto bg-[#14161A] rounded-2xl border border-zinc-800 p-6 sm:p-10">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-orange-500 mb-1">
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>
+                        {userSticker
+                          ? `PERFIL MÉDICO ACTIVO · ID: ${userSticker.tagId}`
+                          : 'PERFIL MÉDICO DE EMERGENCIA'}
+                      </span>
+                    </div>
+                    <h1 className="text-2xl sm:text-[26px] font-bold text-white tracking-tight">
+                      {userSticker
+                        ? 'Tus Datos de Emergencia (Modificables)'
+                        : 'Configura tu Sticker NFC'}
+                    </h1>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleLoadSampleData}
+                    className="text-xs font-semibold text-orange-400 hover:text-orange-300 underline cursor-pointer self-start sm:self-center whitespace-nowrap"
+                  >
+                    Cargar ejemplo
+                  </button>
+                </div>
+
+                <p className="text-sm text-zinc-400 leading-relaxed mb-7">
+                  Tu cuenta protege la edición de estos datos. Puedes modificarlos cuando lo necesites y al escanear tu sticker NFC se desplegará tu Landing Page de emergencia de forma inmediata y sin pedir claves de acceso.
+                </p>
+
+                {!user && (
+                  <div className="mb-6 p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="text-xs text-zinc-300">
+                      <strong className="text-white block mb-0.5">
+                        Cuenta Segura de Usuario
+                      </strong>
+                      Inicia sesión para guardar o modificar tus datos médicos en cualquier momento.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGoogleSignIn}
+                      className="px-4 py-2 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors shrink-0 cursor-pointer"
+                    >
+                      Conectar mi Cuenta
+                    </button>
+                  </div>
+                )}
+
+                {formError && (
+                  <div className="mb-6 p-4 bg-red-950/50 border border-red-800 rounded-xl flex items-start gap-2.5 text-xs text-red-200 font-medium">
+                    <AlertCircle className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
+                    <span>{formError}</span>
+                  </div>
+                )}
+
+                {saveSuccessBanner && (
+                  <div className="mb-6 p-4 bg-zinc-900 border border-orange-500/60 rounded-xl flex items-center justify-between gap-3 text-xs text-zinc-200">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-orange-500 shrink-0" />
+                      <span>
+                        Tus datos médicos se han guardado y vinculado a tu tag NFC (
+                        <strong className="font-mono text-orange-400">
+                          {currentTagId}
+                        </strong>
+                        ).
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <form onSubmit={handleSubmitProfileForm} className="space-y-5">
+                  {/* Row 1: Nombre Completo & Tipo de Sangre */}
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-5">
+                    <div className="sm:col-span-7">
+                      <label
+                        htmlFor="fullName"
+                        className="block text-xs font-semibold text-zinc-300 mb-2"
+                      >
+                        Nombre Completo
+                      </label>
+                      <input
+                        id="fullName"
+                        type="text"
+                        required
+                        maxLength={100}
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        placeholder="Ej. Miguel Ángel Rojas"
+                        className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-5">
+                      <label
+                        htmlFor="bloodType"
+                        className="block text-xs font-semibold text-zinc-300 mb-2"
+                      >
+                        Tipo de Sangre
+                      </label>
+                      <select
+                        id="bloodType"
+                        required
+                        value={bloodType}
+                        onChange={(e) => setBloodType(e.target.value)}
+                        className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg focus:outline-none focus:border-orange-500"
+                      >
+                        <option value="">Selecciona...</option>
+                        {BLOOD_TYPES.map((bt) => (
+                          <option key={bt} value={bt}>
+                            {bt}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Alergias Conocidas */}
+                  <div>
+                    <label
+                      htmlFor="allergies"
+                      className="block text-xs font-semibold text-zinc-300 mb-2"
+                    >
+                      Alergias Conocidas
+                    </label>
+                    <input
+                      id="allergies"
+                      type="text"
+                      maxLength={500}
+                      value={allergies}
+                      onChange={(e) => setAllergies(e.target.value)}
+                      placeholder="Ej. Penicilina, Látex (Deja en blanco si no aplica)"
+                      className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+
+                  {/* Row 3: Condiciones Médicas / Medicación Actual */}
+                  <div>
+                    <label
+                      htmlFor="medicalConditions"
+                      className="block text-xs font-semibold text-zinc-300 mb-2"
+                    >
+                      Condiciones Médicas / Medicación Actual
+                    </label>
+                    <textarea
+                      id="medicalConditions"
+                      rows={3}
+                      maxLength={1000}
+                      value={medicalConditions}
+                      onChange={(e) => setMedicalConditions(e.target.value)}
+                      placeholder="Ej. Asma, Diabetes tipo 1, Tomo anticoagulantes..."
+                      className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500 resize-y"
+                    />
+                  </div>
+
+                  <hr className="border-zinc-800 my-6" />
+
+                  {/* Section: Contactos de Emergencia */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <PhoneCall className="w-4 h-4 text-orange-500 shrink-0" />
+                      <h2 className="text-base font-bold text-white">
+                        Contactos de Emergencia
+                      </h2>
+                    </div>
+
+                    {/* Contacto Principal */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                      <div>
+                        <label
+                          htmlFor="emergencyContactName"
+                          className="block text-xs font-semibold text-zinc-300 mb-2"
+                        >
+                          Nombre del Contacto Principal
+                        </label>
+                        <input
+                          id="emergencyContactName"
+                          type="text"
+                          required
+                          maxLength={100}
+                          value={emergencyContactName}
+                          onChange={(e) =>
+                            setEmergencyContactName(e.target.value)
+                          }
+                          placeholder="Ej. María (Esposa)"
+                          className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="emergencyContactPhone"
+                          className="block text-xs font-semibold text-zinc-300 mb-2"
+                        >
+                          Teléfono Principal
+                        </label>
+                        <input
+                          id="emergencyContactPhone"
+                          type="tel"
+                          required
+                          maxLength={30}
+                          value={emergencyContactPhone}
+                          onChange={(e) =>
+                            setEmergencyContactPhone(e.target.value)
+                          }
+                          placeholder="+52 55 1234 5678"
+                          className="w-full px-4 py-2.5 text-sm font-mono tabular-nums text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 placeholder:font-sans focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Segundo Contacto de Emergencia */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 pt-1">
+                      <div>
+                        <label
+                          htmlFor="secondaryContactName"
+                          className="block text-xs font-semibold text-zinc-300 mb-2"
+                        >
+                          Nombre del Segundo Contacto (Opcional)
+                        </label>
+                        <input
+                          id="secondaryContactName"
+                          type="text"
+                          maxLength={100}
+                          value={secondaryContactName}
+                          onChange={(e) =>
+                            setSecondaryContactName(e.target.value)
+                          }
+                          placeholder="Ej. Carlos Rojas (Hermano / Padre)"
+                          className="w-full px-4 py-2.5 text-sm text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="secondaryContactPhone"
+                          className="block text-xs font-semibold text-zinc-300 mb-2"
+                        >
+                          Teléfono del Segundo Contacto (Opcional)
+                        </label>
+                        <input
+                          id="secondaryContactPhone"
+                          type="tel"
+                          maxLength={30}
+                          value={secondaryContactPhone}
+                          onChange={(e) =>
+                            setSecondaryContactPhone(e.target.value)
+                          }
+                          placeholder="+52 55 8765 4321"
+                          className="w-full px-4 py-2.5 text-sm font-mono tabular-nums text-white bg-[#0B0C0E] border border-zinc-800 rounded-lg placeholder:text-zinc-600 placeholder:font-sans focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Optional Extended Identification Parameters (No PINs / No Passwords) */}
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAdvancedFields(!showAdvancedFields)}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer"
+                    >
+                      {showAdvancedFields ? (
+                        <ChevronUp className="w-4 h-4" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4" />
+                      )}
+                      <span>
+                        Datos de motocicleta, póliza de seguro médico y donación de órganos (Opcional)
+                      </span>
+                    </button>
+
+                    {showAdvancedFields && (
+                      <div className="mt-4 p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                              Motocicleta / Casco / Placa
+                            </label>
+                            <input
+                              type="text"
+                              maxLength={150}
+                              value={motorcycleDetails}
+                              onChange={(e) =>
+                                setMotorcycleDetails(e.target.value)
+                              }
+                              placeholder="Ej. Yamaha MT-07 · Casco AGV Negro"
+                              className="w-full px-3.5 py-2 text-xs text-white bg-[#14161A] border border-zinc-800 rounded-lg focus:outline-none focus:border-orange-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                              Seguro Médico / Póliza / NSS
+                            </label>
+                            <input
+                              type="text"
+                              maxLength={150}
+                              value={insuranceDetails}
+                              onChange={(e) =>
+                                setInsuranceDetails(e.target.value)
+                              }
+                              placeholder="Ej. IMSS / GNP Póliza #88412"
+                              className="w-full px-3.5 py-2 text-xs text-white bg-[#14161A] border border-zinc-800 rounded-lg focus:outline-none focus:border-orange-500"
+                            />
+                          </div>
+                        </div>
+
+                        <label className="flex items-center gap-2.5 text-xs font-semibold text-zinc-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={organDonor}
+                            onChange={(e) => setOrganDonor(e.target.checked)}
+                            className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-orange-500 focus:ring-orange-500"
+                          />
+                          <span>Soy donador de órganos voluntario</span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Primary Action Button */}
+                  <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="w-full sm:w-auto px-9 py-3.5 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors whitespace-nowrap cursor-pointer"
+                    >
+                      {submitting
+                        ? 'Guardando tu perfil...'
+                        : userSticker
+                        ? 'Guardar Cambios y Continuar al Sticker NFC'
+                        : 'Generar Registro y Comprar Sticker NFC'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* Quiet Footer */}
+      <footer className="border-t border-zinc-800/80 bg-[#08090B] py-5 px-4 sm:px-8 mt-auto">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
+          <span>
+            Biker Safe · Perfil Médico de Emergencia y Stickers NFC Personalizados
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setViewMode('main');
+              setMainStep('profile_form');
+            }}
+            className="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer"
+          >
+            Pantalla Principal
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <BikerSafeApp />
+    </ErrorBoundary>
+  );
+}

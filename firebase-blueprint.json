@@ -1,0 +1,286 @@
+{
+  "entities": {
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated private account information for a registered Biker Safe user.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the account owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the authenticated user.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified email address of the user.",
+          "minLength": 3,
+          "maxLength": 150
+        },
+        "personalPhone": {
+          "type": "string",
+          "description": "Optional personal phone number of the user.",
+          "minLength": 0,
+          "maxLength": 30
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "displayName",
+        "email",
+        "personalPhone",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "EmergencySticker": {
+      "title": "EmergencySticker",
+      "description": "Emergency medical profile bound to a unique NFC tag URL.",
+      "type": "object",
+      "properties": {
+        "tagId": {
+          "type": "string",
+          "description": "Unique NFC tag identifier linked to the user's emergency URL.",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the rider who owns this NFC sticker.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Full name of the rider or patient.",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "bloodType": {
+          "type": "string",
+          "description": "ABO/Rh blood type.",
+          "enum": [
+            "O+",
+            "O-",
+            "A+",
+            "A-",
+            "B+",
+            "B-",
+            "AB+",
+            "AB-",
+            "Desconocido"
+          ],
+          "minLength": 2,
+          "maxLength": 15
+        },
+        "allergies": {
+          "type": "string",
+          "description": "Known medication, food, or material allergies.",
+          "minLength": 0,
+          "maxLength": 500
+        },
+        "medicalConditions": {
+          "type": "string",
+          "description": "Chronic medical conditions and current medications.",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "emergencyContactName": {
+          "type": "string",
+          "description": "Full name and relationship of primary emergency contact.",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "emergencyContactPhone": {
+          "type": "string",
+          "description": "Primary emergency dispatch telephone number.",
+          "minLength": 5,
+          "maxLength": 30,
+          "pattern": "^[0-9+\\-()\\s]+$"
+        },
+        "secondaryContactName": {
+          "type": "string",
+          "description": "Full name and relationship of secondary emergency contact.",
+          "minLength": 0,
+          "maxLength": 100
+        },
+        "secondaryContactPhone": {
+          "type": "string",
+          "description": "Secondary emergency dispatch telephone number.",
+          "minLength": 0,
+          "maxLength": 30,
+          "pattern": "^([0-9+\\-()\\s]+)?$"
+        },
+        "motorcycleDetails": {
+          "type": "string",
+          "description": "Motorcycle model, plate, or helmet details for roadside identification.",
+          "minLength": 0,
+          "maxLength": 150
+        },
+        "insuranceDetails": {
+          "type": "string",
+          "description": "Medical insurance provider, policy number, or social security ID.",
+          "minLength": 0,
+          "maxLength": 150
+        },
+        "organDonor": {
+          "type": "boolean",
+          "description": "Whether the person is a registered organ donor."
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether this NFC tag is active for emergency responder access."
+        },
+        "accessPin": {
+          "type": "string",
+          "description": "Optional security PIN or code printed on the physical helmet sticker.",
+          "minLength": 0,
+          "maxLength": 10
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the sticker record was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the sticker record was last updated."
+        }
+      },
+      "required": [
+        "tagId",
+        "ownerId",
+        "fullName",
+        "bloodType",
+        "allergies",
+        "medicalConditions",
+        "emergencyContactName",
+        "emergencyContactPhone",
+        "secondaryContactName",
+        "secondaryContactPhone",
+        "motorcycleDetails",
+        "insuranceDetails",
+        "organDonor",
+        "isActive",
+        "accessPin",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ScanLog": {
+      "title": "ScanLog",
+      "description": "Audit log entry recorded when an emergency responder scans or accesses an NFC sticker.",
+      "type": "object",
+      "properties": {
+        "scanId": {
+          "type": "string",
+          "description": "Unique scan event ID.",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "tagId": {
+          "type": "string",
+          "description": "Parent NFC sticker tagId.",
+          "minLength": 4,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "stickerOwnerId": {
+          "type": "string",
+          "description": "UID of the sticker owner for secure relational queries.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "scannerUid": {
+          "type": "string",
+          "description": "UID of the authenticated paramedic or responder who accessed the record.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "scannerLabel": {
+          "type": "string",
+          "description": "Name or identifier of the responder who accessed the profile.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "scanMethod": {
+          "type": "string",
+          "description": "Access mechanism used to open the emergency profile.",
+          "enum": [
+            "NFC_TAG",
+            "QR_CODE",
+            "DIRECT_URL",
+            "SIMULATOR"
+          ],
+          "minLength": 6,
+          "maxLength": 20
+        },
+        "locationNote": {
+          "type": "string",
+          "description": "Optional triage note or roadside location reference.",
+          "minLength": 0,
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the scan event."
+        }
+      },
+      "required": [
+        "scanId",
+        "tagId",
+        "stickerOwnerId",
+        "scannerUid",
+        "scannerLabel",
+        "scanMethod",
+        "locationNote",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/private/{docId}": {
+      "schema": {
+        "$ref": "#/entities/UserPrivateInfo"
+      },
+      "description": "Strictly isolated PII account profile for the authenticated user."
+    },
+    "/stickers/{tagId}": {
+      "schema": {
+        "$ref": "#/entities/EmergencySticker"
+      },
+      "description": "Emergency medical records tied to physical NFC stickers via unique tagId."
+    },
+    "/stickers/{tagId}/scans/{scanId}": {
+      "schema": {
+        "$ref": "#/entities/ScanLog"
+      },
+      "description": "Immutable audit log of emergency NFC tag reads."
+    }
+  }
+}

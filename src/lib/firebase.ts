@@ -3,6 +3,10 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+  sendPasswordResetEmail,
   signOut as firebaseSignOut,
   User,
 } from 'firebase/auth';
@@ -861,15 +865,25 @@ export function parseEncodedStickerPacket(encoded: string | null): Partial<Emerg
   }
 }
 
-export async function syncUserPrivateProfile(user: User): Promise<void> {
-  if (!user.emailVerified) return;
-  const path = `users/${user.uid}/private/info`;
+export async function syncUserPrivateProfile(
+  user: User,
+  customDisplayName?: string
+): Promise<void> {
+  if (!user) return;
   try {
+    const resolvedName = (
+      customDisplayName ||
+      user.displayName ||
+      (user.email ? user.email.split('@')[0] : '') ||
+      'Usuario Biker Safe'
+    )
+      .trim()
+      .slice(0, 100);
     await setDoc(
       doc(db, 'users', user.uid, 'private', 'info'),
       {
         ownerId: user.uid,
-        displayName: (user.displayName || 'Usuario Biker Safe').slice(0, 100),
+        displayName: resolvedName || 'Usuario Biker Safe',
         email: (user.email || 'usuario@bikersafe.mx').slice(0, 150),
         personalPhone: (user.phoneNumber || '').slice(0, 30),
         createdAt: serverTimestamp(),
@@ -886,6 +900,125 @@ export async function signInWithGoogle(): Promise<User> {
   const result = await signInWithPopup(auth, googleProvider);
   await syncUserPrivateProfile(result.user);
   return result.user;
+}
+
+export async function registerWithEmailAndPassword(
+  fullName: string,
+  email: string,
+  password: string
+): Promise<User> {
+  const cleanName = fullName.trim().slice(0, 100);
+  const cleanEmail = email.trim().toLowerCase();
+  const result = await createUserWithEmailAndPassword(
+    auth,
+    cleanEmail,
+    password
+  );
+  if (cleanName.length >= 2) {
+    try {
+      await updateProfile(result.user, { displayName: cleanName });
+    } catch {
+      // Non-critical if updateProfile fails
+    }
+  }
+  await syncUserPrivateProfile(result.user, cleanName);
+  return result.user;
+}
+
+export async function loginWithEmailAndPassword(
+  email: string,
+  password: string
+): Promise<User> {
+  const cleanEmail = email.trim().toLowerCase();
+  const result = await signInWithEmailAndPassword(auth, cleanEmail, password);
+  await syncUserPrivateProfile(result.user);
+  return result.user;
+}
+
+export async function resetPasswordByEmail(email: string): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase();
+  await sendPasswordResetEmail(auth, cleanEmail);
+}
+
+export function formatFirebaseAuthError(err: unknown): {
+  message: string;
+  isOperationNotAllowed: boolean;
+} {
+  const code =
+    err && typeof err === 'object' && 'code' in err
+      ? String((err as { code?: string }).code || '')
+      : '';
+  const rawMsg = err instanceof Error ? err.message : String(err || '');
+
+  if (
+    code === 'auth/operation-not-allowed' ||
+    rawMsg.includes('auth/operation-not-allowed')
+  ) {
+    return {
+      message:
+        'El método de acceso con Correo y Contraseña aún no está habilitado en Firebase Console. Actívalo en Authentication → Sign-in method → Correo electrónico/contraseña.',
+      isOperationNotAllowed: true,
+    };
+  }
+  if (
+    code === 'auth/email-already-in-use' ||
+    rawMsg.includes('auth/email-already-in-use')
+  ) {
+    return {
+      message:
+        'Este correo electrónico ya está registrado. Cambia a la pestaña "Iniciar Sesión" para entrar con tu contraseña.',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (code === 'auth/invalid-email' || rawMsg.includes('auth/invalid-email')) {
+    return {
+      message: 'El formato del correo electrónico no es válido.',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (code === 'auth/weak-password' || rawMsg.includes('auth/weak-password')) {
+    return {
+      message: 'La contraseña es muy corta. Debe tener al menos 6 caracteres.',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (
+    code === 'auth/user-not-found' ||
+    code === 'auth/wrong-password' ||
+    code === 'auth/invalid-credential' ||
+    rawMsg.includes('auth/invalid-credential') ||
+    rawMsg.includes('auth/wrong-password') ||
+    rawMsg.includes('auth/user-not-found')
+  ) {
+    return {
+      message:
+        'Correo electrónico o contraseña incorrectos. Si aún no tienes cuenta, regístrate en la pestaña "Crear Cuenta".',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (
+    code === 'auth/too-many-requests' ||
+    rawMsg.includes('auth/too-many-requests')
+  ) {
+    return {
+      message:
+        'Demasiados intentos seguidos. Espera unos momentos antes de volver a intentarlo o restablece tu contraseña.',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (
+    code === 'auth/popup-closed-by-user' ||
+    rawMsg.includes('auth/popup-closed-by-user')
+  ) {
+    return {
+      message: 'La ventana de inicio de sesión fue cerrada antes de terminar.',
+      isOperationNotAllowed: false,
+    };
+  }
+  return {
+    message: rawMsg || 'No se pudo completar la autenticación. Verifica tus datos.',
+    isOperationNotAllowed: false,
+  };
 }
 
 export async function signInAdminWithGoogle(): Promise<User> {

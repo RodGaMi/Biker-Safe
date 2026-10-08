@@ -8,6 +8,10 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+  sendPasswordResetEmail,
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth';
@@ -993,6 +997,20 @@ const state = {
 
   // Aviso de Privacidad Integral Modal State
   privacyModalOpen: false,
+
+  // Email & Password Registration / Login Modal State
+  authModalOpen: false,
+  authMode: 'register', // 'register' | 'login' | 'reset'
+  authNameInput: '',
+  authEmailInput: '',
+  authPasswordInput: '',
+  authConfirmPasswordInput: '',
+  authShowPassword: false,
+  authSubmitting: false,
+  authError: null,
+  authOperationNotAllowed: false,
+  authSuccessMessage: null,
+  pendingSaveProfileAfterAuth: false,
 };
 
 const QA_CATEGORIES = [
@@ -1025,7 +1043,7 @@ const QA_ITEMS = [
     categoryLabel: 'Perfil y Privacidad',
     question: '¿Puedo modificar mis datos médicos o contactos de emergencia después de comprar?',
     answer:
-      'Sí, todas las veces que lo necesites. Solo inicia sesión con tu cuenta de Google en Biker Safe, actualiza tus teléfonos de emergencia, parentesco, alergias, seguro o datos de tu motocicleta y guarda los cambios. Tu información se actualiza al instante sin tener que cambiar tu sticker físico.',
+      'Sí, todas las veces que lo necesites. Solo inicia sesión con tu correo y contraseña o con tu cuenta de Google en Biker Safe, actualiza tus teléfonos de emergencia, parentesco, alergias, seguro o datos de tu motocicleta y guarda los cambios. Tu información se actualiza al instante sin tener que cambiar tu sticker físico.',
   },
   {
     id: 'qa-4',
@@ -1077,14 +1095,85 @@ let unsubscribePackages = null;
 let unsubscribeStickerModels = null;
 let unsubscribePaymentSettings = null;
 
-async function syncUserPrivateProfile(user) {
-  if (!user || !user.emailVerified) return;
+function formatFirebaseAuthError(err) {
+  const code = err && typeof err === 'object' && 'code' in err ? String(err.code || '') : '';
+  const rawMsg = err instanceof Error ? err.message : String(err || '');
+
+  if (code === 'auth/operation-not-allowed' || rawMsg.includes('auth/operation-not-allowed')) {
+    return {
+      message:
+        'El método de acceso con Correo y Contraseña aún no está habilitado en Firebase Console. Actívalo en Authentication → Sign-in method → Correo electrónico/contraseña.',
+      isOperationNotAllowed: true,
+    };
+  }
+  if (code === 'auth/email-already-in-use' || rawMsg.includes('auth/email-already-in-use')) {
+    return {
+      message:
+        'Este correo electrónico ya está registrado. Cambia a la pestaña "Iniciar Sesión" para entrar con tu contraseña.',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (code === 'auth/invalid-email' || rawMsg.includes('auth/invalid-email')) {
+    return {
+      message: 'El formato del correo electrónico no es válido.',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (code === 'auth/weak-password' || rawMsg.includes('auth/weak-password')) {
+    return {
+      message: 'La contraseña es muy corta. Debe tener al menos 6 caracteres.',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (
+    code === 'auth/user-not-found' ||
+    code === 'auth/wrong-password' ||
+    code === 'auth/invalid-credential' ||
+    rawMsg.includes('auth/invalid-credential') ||
+    rawMsg.includes('auth/wrong-password') ||
+    rawMsg.includes('auth/user-not-found')
+  ) {
+    return {
+      message:
+        'Correo electrónico o contraseña incorrectos. Si aún no tienes cuenta, regístrate en la pestaña "Crear Cuenta".',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (code === 'auth/too-many-requests' || rawMsg.includes('auth/too-many-requests')) {
+    return {
+      message:
+        'Demasiados intentos seguidos. Espera unos momentos antes de volver a intentarlo o restablece tu contraseña.',
+      isOperationNotAllowed: false,
+    };
+  }
+  if (code === 'auth/popup-closed-by-user' || rawMsg.includes('auth/popup-closed-by-user')) {
+    return {
+      message: 'La ventana de inicio de sesión fue cerrada antes de terminar.',
+      isOperationNotAllowed: false,
+    };
+  }
+  return {
+    message: rawMsg || 'No se pudo completar la autenticación. Verifica tus datos.',
+    isOperationNotAllowed: false,
+  };
+}
+
+async function syncUserPrivateProfile(user, customDisplayName = '') {
+  if (!user) return;
   try {
+    const resolvedName = String(
+      customDisplayName ||
+        user.displayName ||
+        (user.email ? user.email.split('@')[0] : '') ||
+        'Usuario Biker Safe'
+    )
+      .trim()
+      .slice(0, 100);
     await setDoc(
       doc(db, 'users', user.uid, 'private', 'info'),
       {
         ownerId: user.uid,
-        displayName: (user.displayName || 'Usuario Biker Safe').slice(0, 100),
+        displayName: resolvedName || 'Usuario Biker Safe',
         email: (user.email || 'usuario@bikersafe.mx').slice(0, 150),
         personalPhone: (user.phoneNumber || '').slice(0, 30),
         createdAt: serverTimestamp(),
@@ -1097,22 +1186,126 @@ async function syncUserPrivateProfile(user) {
   }
 }
 
+function openAuthModal(mode = 'register') {
+  syncFormInputsBeforeReRender();
+  state.authMode = mode;
+  state.authError = null;
+  state.authOperationNotAllowed = false;
+  state.authSuccessMessage = null;
+  if (!state.authNameInput && state.fullName) {
+    state.authNameInput = state.fullName;
+  }
+  state.authModalOpen = true;
+  renderApp();
+}
+
+async function saveMedicalProfileForUser(activeUser) {
+  if (!activeUser) return false;
+
+  const isUpdatingExisting = Boolean(state.currentTagId && state.userSticker);
+  const targetTagId = state.currentTagId || generateUniqueTagId();
+
+  const validation = sanitizeAndValidateStickerInput({
+    tagId: targetTagId,
+    ownerId: activeUser.uid,
+    fullName: state.fullName,
+    bloodType: state.bloodType,
+    allergies: state.allergies,
+    medicalConditions: state.medicalConditions,
+    emergencyContactName: state.emergencyContactName,
+    emergencyContactRelation: state.emergencyContactRelation,
+    emergencyContactPhone: state.emergencyContactPhone,
+    secondaryContactName: state.secondaryContactName,
+    secondaryContactRelation: state.secondaryContactRelation,
+    secondaryContactPhone: state.secondaryContactPhone,
+    motorcycleDetails: state.motorcycleDetails,
+    insuranceDetails: state.insuranceDetails,
+    organDonor: state.organDonor,
+  });
+
+  if (!validation.valid) {
+    state.formError = validation.error;
+    renderApp();
+    return false;
+  }
+
+  state.submitting = true;
+  renderApp();
+
+  const docPath = `stickers/${targetTagId}`;
+  try {
+    if (isUpdatingExisting) {
+      await updateDoc(doc(db, 'stickers', targetTagId), {
+        fullName: validation.data.fullName,
+        bloodType: validation.data.bloodType,
+        allergies: validation.data.allergies,
+        medicalConditions: validation.data.medicalConditions,
+        emergencyContactName: validation.data.emergencyContactName,
+        emergencyContactRelation: validation.data.emergencyContactRelation,
+        emergencyContactPhone: validation.data.emergencyContactPhone,
+        secondaryContactName: validation.data.secondaryContactName,
+        secondaryContactRelation: validation.data.secondaryContactRelation,
+        secondaryContactPhone: validation.data.secondaryContactPhone,
+        motorcycleDetails: validation.data.motorcycleDetails,
+        insuranceDetails: validation.data.insuranceDetails,
+        organDonor: validation.data.organDonor,
+        isActive: true,
+        accessPin: '',
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(doc(db, 'stickers', targetTagId), {
+        ...validation.data,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    state.userSticker = validation.data;
+    state.currentTagId = validation.data.tagId;
+    state.landingSticker = validation.data;
+    state.landingTagId = validation.data.tagId;
+    state.saveSuccessBanner = true;
+    state.mainStep = 'sticker_checkout';
+    return true;
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      isUpdatingExisting ? OperationType.UPDATE : OperationType.CREATE,
+      docPath
+    );
+    return false;
+  } finally {
+    state.submitting = false;
+    renderApp();
+  }
+}
+
 async function handleGoogleSignIn(forceAccountSelection = false) {
   state.formError = null;
+  state.authError = null;
+  state.authOperationNotAllowed = false;
   renderApp();
   try {
     const provider = new GoogleAuthProvider();
-    if (forceAccountSelection) {
+    if (forceAccountSelection === true) {
       provider.setCustomParameters({ prompt: 'select_account' });
     }
     const result = await signInWithPopup(auth, provider);
     await syncUserPrivateProfile(result.user);
+    state.user = result.user;
+    state.authModalOpen = false;
+    if (state.pendingSaveProfileAfterAuth) {
+      state.pendingSaveProfileAfterAuth = false;
+      await saveMedicalProfileForUser(result.user);
+    } else {
+      renderApp();
+    }
     return result.user;
   } catch (err) {
-    state.formError =
-      err instanceof Error
-        ? `Error al iniciar sesión: ${err.message}`
-        : 'No se pudo completar la autenticación.';
+    const parsed = formatFirebaseAuthError(err);
+    state.authError = parsed.message;
+    state.formError = parsed.message;
     renderApp();
     return null;
   }
@@ -1523,7 +1716,7 @@ function renderHeader() {
         </nav>
 
         <!-- Zone 3: User Account Action -->
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 sm:gap-3">
           ${
             state.user
               ? `
@@ -1537,9 +1730,14 @@ function renderHeader() {
             </div>
           `
               : `
-            <button type="button" id="auth-signin-btn" class="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-black bg-orange-500 hover:bg-orange-400 rounded-lg transition-colors whitespace-nowrap cursor-pointer">
-              <span>Iniciar Sesión Segura</span>
-            </button>
+            <div class="flex items-center gap-2">
+              <button type="button" id="header-login-btn" class="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer">
+                <span>Iniciar Sesión</span>
+              </button>
+              <button type="button" id="auth-signin-btn" class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-black bg-orange-500 hover:bg-orange-400 rounded-lg transition-colors whitespace-nowrap cursor-pointer">
+                <span>Crear Cuenta</span>
+              </button>
+            </div>
           `
           }
         </div>
@@ -2385,14 +2583,24 @@ function renderProfileFormStep() {
       ${
         !state.user
           ? `
-        <div class="mb-6 p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div class="text-xs text-zinc-300">
-            <strong class="text-white block mb-0.5">Cuenta Segura de Usuario</strong>
-            Inicia sesión para guardar o modificar tus datos médicos en cualquier momento.
+        <div class="mb-6 p-4 sm:p-5 bg-[#0B0C0E] border border-zinc-800 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div class="text-xs text-zinc-300 space-y-1">
+            <strong class="text-white block text-sm">Cuenta Segura de Usuario (Correo y Contraseña o Google)</strong>
+            <p class="text-zinc-400 leading-relaxed">
+              ¿No cuentas con correo de Google? Puedes <strong class="text-orange-400">registrarte con cualquier correo electrónico y contraseña</strong> o acceder con Google para guardar y modificar tus datos médicos cuando lo necesites.
+            </p>
           </div>
-          <button type="button" id="form-signin-btn" class="px-4 py-2 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors shrink-0 cursor-pointer">
-            Conectar mi Cuenta
-          </button>
+          <div class="flex flex-wrap items-center gap-2 shrink-0">
+            <button type="button" id="form-register-email-btn" class="px-4 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap">
+              Crear Cuenta con Correo
+            </button>
+            <button type="button" id="form-login-email-btn" class="px-3.5 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap">
+              Ya tengo Cuenta
+            </button>
+            <button type="button" id="form-signin-btn" class="px-3.5 py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap">
+              Entrar con Google
+            </button>
+          </div>
         </div>
       `
           : ''
@@ -3805,6 +4013,15 @@ function syncFormInputsBeforeReRender() {
   const adminOrdSearchEl = document.getElementById('admin-order-search-input');
   if (adminOrdSearchEl) state.adminOrderSearchQuery = adminOrdSearchEl.value;
 
+  const authNameEl = document.getElementById('auth-name-input');
+  if (authNameEl) state.authNameInput = authNameEl.value;
+  const authEmailEl = document.getElementById('auth-email-input');
+  if (authEmailEl) state.authEmailInput = authEmailEl.value;
+  const authPasswordEl = document.getElementById('auth-password-input');
+  if (authPasswordEl) state.authPasswordInput = authPasswordEl.value;
+  const authConfirmEl = document.getElementById('auth-confirm-password-input');
+  if (authConfirmEl) state.authConfirmPasswordInput = authConfirmEl.value;
+
   const payBankEl = document.getElementById('pay-bank-name');
   if (payBankEl) state.paymentSettings.bankName = payBankEl.value;
   const payBenEl = document.getElementById('pay-beneficiary-name');
@@ -4299,6 +4516,308 @@ function renderPrivacyNoticeModal() {
   `;
 }
 
+function renderAuthModal() {
+  if (!state.authModalOpen) return '';
+
+  const isRegister = state.authMode === 'register';
+  const isLogin = state.authMode === 'login';
+  const isReset = state.authMode === 'reset';
+  const passType = state.authShowPassword ? 'text' : 'password';
+
+  return `
+    <div
+      id="auth-modal-backdrop"
+      class="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="auth-modal-title"
+    >
+      <div
+        id="auth-modal-panel"
+        class="relative w-full max-w-md bg-[#14161A] border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden"
+      >
+        <!-- Modal Header -->
+        <div class="bg-[#08090B] border-b border-zinc-800 px-6 py-4 flex items-center justify-between gap-3">
+          <div>
+            <div class="text-[11px] font-bold text-orange-500 tracking-wide">
+              CUENTA SEGURA BIKER SAFE
+            </div>
+            <h2 id="auth-modal-title" class="text-base sm:text-lg font-bold text-white tracking-tight">
+              ${
+                isRegister
+                  ? 'Crear Cuenta con Correo y Contraseña'
+                  : isLogin
+                  ? 'Iniciar Sesión en mi Cuenta'
+                  : 'Recuperar mi Contraseña'
+              }
+            </h2>
+          </div>
+
+          <button
+            type="button"
+            id="auth-modal-close-btn"
+            class="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-colors cursor-pointer shrink-0"
+            aria-label="Cerrar ventana de acceso"
+          >
+            ✕
+          </button>
+        </div>
+
+        <!-- Modal Body -->
+        <div class="p-6 space-y-5">
+          ${
+            state.pendingSaveProfileAfterAuth
+              ? `
+            <div class="p-3.5 bg-[#0B0C0E] border border-orange-500/50 rounded-xl text-xs text-zinc-200 leading-relaxed">
+              <strong class="text-orange-400 block mb-0.5">Guarda tu perfil médico de forma segura</strong>
+              Crea tu cuenta con cualquier correo electrónico y contraseña (o entra con Google) para guardar tus datos médicos y continuar al Paso 2.
+            </div>
+          `
+              : `
+            <p class="text-xs text-zinc-400 leading-relaxed">
+              ¿No cuentas con correo de Google? Regístrate con cualquier correo electrónico y una contraseña para crear y editar tu perfil médico cuando lo necesites.
+            </p>
+          `
+          }
+
+          <!-- Mode Switcher Tabs (Crear Cuenta / Iniciar Sesión) -->
+          ${
+            !isReset
+              ? `
+            <div class="grid grid-cols-2 gap-1.5 p-1 bg-[#0B0C0E] border border-zinc-800 rounded-xl">
+              <button
+                type="button"
+                data-auth-mode="register"
+                class="auth-mode-tab-btn py-2 px-3 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  isRegister
+                    ? 'bg-orange-500 text-black'
+                    : 'text-zinc-400 hover:text-white'
+                }"
+              >
+                Crear Cuenta (Registro)
+              </button>
+              <button
+                type="button"
+                data-auth-mode="login"
+                class="auth-mode-tab-btn py-2 px-3 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  isLogin
+                    ? 'bg-orange-500 text-black'
+                    : 'text-zinc-400 hover:text-white'
+                }"
+              >
+                Iniciar Sesión
+              </button>
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            state.authError
+              ? `
+            <div class="p-3.5 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200 space-y-2 leading-relaxed">
+              <div>${escapeHtml(state.authError)}</div>
+              ${
+                state.authOperationNotAllowed
+                  ? `
+                <div class="pt-2 border-t border-red-800/60 text-[11px] text-zinc-300 space-y-1.5">
+                  <strong class="text-orange-400 block">Nota para el Administrador del Proyecto:</strong>
+                  <p>Para habilitar el registro con correo y contraseña en Firebase, abre tu consola de Firebase, entra a <strong>Authentication → Sign-in method</strong>, selecciona <strong>Correo electrónico/contraseña</strong> y actívalo:</p>
+                  <a
+                    href="https://console.firebase.google.com/project/earnest-synapse-xvr20/authentication/providers"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-400 text-black font-bold rounded-lg transition-colors mt-1"
+                  >
+                    <span>Abrir Firebase Console (Proveedores de Acceso)</span>
+                  </a>
+                </div>
+              `
+                  : ''
+              }
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            state.authSuccessMessage
+              ? `
+            <div class="p-3.5 bg-zinc-900 border border-orange-500/60 rounded-xl text-xs text-orange-300 leading-relaxed">
+              ${escapeHtml(state.authSuccessMessage)}
+            </div>
+          `
+              : ''
+          }
+
+          <!-- Email & Password Form -->
+          <form id="auth-email-form" class="space-y-4">
+            ${
+              isRegister
+                ? `
+              <div>
+                <label for="auth-name-input" class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  Nombre Completo
+                </label>
+                <input
+                  id="auth-name-input"
+                  type="text"
+                  required
+                  maxlength="100"
+                  value="${escapeHtml(state.authNameInput)}"
+                  placeholder="Ej. Miguel Ángel Rojas"
+                  class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            `
+                : ''
+            }
+
+            <div>
+              <label for="auth-email-input" class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                Correo Electrónico
+              </label>
+              <input
+                id="auth-email-input"
+                type="email"
+                required
+                maxlength="150"
+                value="${escapeHtml(state.authEmailInput)}"
+                placeholder="tucorreo@ejemplo.com"
+                class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+              />
+            </div>
+
+            ${
+              !isReset
+                ? `
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <label for="auth-password-input" class="block text-xs font-semibold text-zinc-300">
+                    ${isRegister ? 'Crear Contraseña (mínimo 6 caracteres)' : 'Contraseña'}
+                  </label>
+                  <button
+                    type="button"
+                    id="auth-toggle-password-btn"
+                    class="text-[11px] font-semibold text-orange-400 hover:text-orange-300 cursor-pointer"
+                  >
+                    ${state.authShowPassword ? 'Ocultar' : 'Mostrar'}
+                  </button>
+                </div>
+                <input
+                  id="auth-password-input"
+                  type="${passType}"
+                  required
+                  minlength="6"
+                  maxlength="100"
+                  value="${escapeHtml(state.authPasswordInput)}"
+                  placeholder="••••••••"
+                  class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            `
+                : ''
+            }
+
+            ${
+              isRegister
+                ? `
+              <div>
+                <label for="auth-confirm-password-input" class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                  Confirmar Contraseña
+                </label>
+                <input
+                  id="auth-confirm-password-input"
+                  type="${passType}"
+                  required
+                  minlength="6"
+                  maxlength="100"
+                  value="${escapeHtml(state.authConfirmPasswordInput)}"
+                  placeholder="Repite tu contraseña"
+                  class="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                />
+              </div>
+            `
+                : ''
+            }
+
+            ${
+              isLogin
+                ? `
+              <div class="flex justify-end">
+                <button
+                  type="button"
+                  data-auth-mode="reset"
+                  class="auth-mode-tab-btn text-xs text-orange-400 hover:text-orange-300 underline cursor-pointer"
+                >
+                  ¿Olvidaste tu contraseña? Recupérala por correo
+                </button>
+              </div>
+            `
+                : ''
+            }
+
+            <button
+              type="submit"
+              ${state.authSubmitting ? 'disabled' : ''}
+              class="w-full py-3 px-5 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+            >
+              ${
+                state.authSubmitting
+                  ? 'Procesando...'
+                  : isRegister
+                  ? 'Crear mi Cuenta y Registrarme'
+                  : isLogin
+                  ? 'Iniciar Sesión con Correo y Contraseña'
+                  : 'Enviar Enlace de Recuperación'
+              }
+            </button>
+
+            ${
+              isReset
+                ? `
+              <div class="text-center pt-1">
+                <button
+                  type="button"
+                  data-auth-mode="login"
+                  class="auth-mode-tab-btn text-xs font-semibold text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  ← Volver a Iniciar Sesión
+                </button>
+              </div>
+            `
+                : ''
+            }
+          </form>
+
+          <!-- Divider for Google Option -->
+          <div class="relative py-1 flex items-center justify-center">
+            <div class="border-t border-zinc-800 w-full"></div>
+            <span class="bg-[#14161A] px-3 text-[11px] text-zinc-500 whitespace-nowrap">
+              O si cuentas con correo de Google
+            </span>
+            <div class="border-t border-zinc-800 w-full"></div>
+          </div>
+
+          <button
+            type="button"
+            id="auth-modal-google-btn"
+            class="w-full py-2.5 px-4 bg-[#0B0C0E] hover:bg-zinc-900 border border-zinc-700 text-zinc-100 text-xs font-semibold rounded-xl inline-flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
+          >
+            <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.8C6.2 7.2 8.9 5 12 5z"/>
+              <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.6l3.7 2.9c2.2-2 3.7-5 3.7-8.7z"/>
+              <path fill="#FBBC05" d="M5.3 14.8c-.2-.8-.4-1.8-.4-2.8s.2-2 .4-2.8L1.6 6.4C.6 8.4 0 10.6 0 12s.6 3.6 1.6 5.6l3.7-2.8z"/>
+              <path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5l-3.7 2.8C3.5 19.9 7.4 23 12 23z"/>
+            </svg>
+            <span>Continuar con Cuenta de Google</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 export function renderApp() {
   const root = document.getElementById('root');
   if (!root) return;
@@ -4399,6 +4918,7 @@ export function renderApp() {
 
       ${renderFloatingQaWidget()}
       ${renderPrivacyNoticeModal()}
+      ${renderAuthModal()}
     </div>
   `;
 
@@ -4574,13 +5094,203 @@ function bindEvents() {
   }
 
   const signInBtn = document.getElementById('auth-signin-btn');
-  if (signInBtn) signInBtn.addEventListener('click', handleGoogleSignIn);
+  if (signInBtn) {
+    signInBtn.addEventListener('click', () => {
+      state.pendingSaveProfileAfterAuth = false;
+      openAuthModal('register');
+    });
+  }
+
+  const headerLoginBtn = document.getElementById('header-login-btn');
+  if (headerLoginBtn) {
+    headerLoginBtn.addEventListener('click', () => {
+      state.pendingSaveProfileAfterAuth = false;
+      openAuthModal('login');
+    });
+  }
+
+  const formRegisterEmailBtn = document.getElementById('form-register-email-btn');
+  if (formRegisterEmailBtn) {
+    formRegisterEmailBtn.addEventListener('click', () => {
+      state.pendingSaveProfileAfterAuth = false;
+      openAuthModal('register');
+    });
+  }
+
+  const formLoginEmailBtn = document.getElementById('form-login-email-btn');
+  if (formLoginEmailBtn) {
+    formLoginEmailBtn.addEventListener('click', () => {
+      state.pendingSaveProfileAfterAuth = false;
+      openAuthModal('login');
+    });
+  }
 
   const formSignInBtn = document.getElementById('form-signin-btn');
-  if (formSignInBtn) formSignInBtn.addEventListener('click', handleGoogleSignIn);
+  if (formSignInBtn) {
+    formSignInBtn.addEventListener('click', () => {
+      handleGoogleSignIn(false);
+    });
+  }
 
   const signOutBtn = document.getElementById('auth-signout-btn');
   if (signOutBtn) signOutBtn.addEventListener('click', handleSignOut);
+
+  // Auth Modal Listeners (Email & Password Registration / Login / Reset + Google)
+  const authModalCloseBtn = document.getElementById('auth-modal-close-btn');
+  if (authModalCloseBtn) {
+    authModalCloseBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.authModalOpen = false;
+      state.pendingSaveProfileAfterAuth = false;
+      renderApp();
+    });
+  }
+
+  const authModalBackdrop = document.getElementById('auth-modal-backdrop');
+  if (authModalBackdrop) {
+    authModalBackdrop.addEventListener('click', (e) => {
+      if (e.target === authModalBackdrop) {
+        syncFormInputsBeforeReRender();
+        state.authModalOpen = false;
+        state.pendingSaveProfileAfterAuth = false;
+        renderApp();
+      }
+    });
+  }
+
+  const authModeBtns = document.querySelectorAll('.auth-mode-tab-btn');
+  authModeBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      const targetMode = btn.getAttribute('data-auth-mode');
+      if (targetMode === 'register' || targetMode === 'login' || targetMode === 'reset') {
+        state.authMode = targetMode;
+        state.authError = null;
+        state.authOperationNotAllowed = false;
+        state.authSuccessMessage = null;
+        renderApp();
+      }
+    });
+  });
+
+  const authTogglePasswordBtn = document.getElementById('auth-toggle-password-btn');
+  if (authTogglePasswordBtn) {
+    authTogglePasswordBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.authShowPassword = !state.authShowPassword;
+      renderApp();
+    });
+  }
+
+  const authGoogleBtn = document.getElementById('auth-modal-google-btn');
+  if (authGoogleBtn) {
+    authGoogleBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      handleGoogleSignIn(false);
+    });
+  }
+
+  const authEmailForm = document.getElementById('auth-email-form');
+  if (authEmailForm) {
+    authEmailForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      syncFormInputsBeforeReRender();
+      state.authError = null;
+      state.authOperationNotAllowed = false;
+      state.authSuccessMessage = null;
+
+      const cleanName = String(state.authNameInput || '').trim();
+      const cleanEmail = String(state.authEmailInput || '').trim().toLowerCase();
+      const password = String(state.authPasswordInput || '');
+      const confirmPassword = String(state.authConfirmPasswordInput || '');
+
+      if (!cleanEmail || !cleanEmail.includes('@')) {
+        state.authError = 'Ingresa un correo electrónico válido.';
+        renderApp();
+        return;
+      }
+
+      if (state.authMode === 'reset') {
+        state.authSubmitting = true;
+        renderApp();
+        try {
+          await sendPasswordResetEmail(auth, cleanEmail);
+          state.authSuccessMessage = `Enviamos un enlace de recuperación de contraseña a ${cleanEmail}. Revisa tu bandeja de entrada o carpeta de spam.`;
+        } catch (err) {
+          const parsed = formatFirebaseAuthError(err);
+          state.authError = parsed.message;
+          state.authOperationNotAllowed = parsed.isOperationNotAllowed;
+        } finally {
+          state.authSubmitting = false;
+          renderApp();
+        }
+        return;
+      }
+
+      if (password.length < 6) {
+        state.authError = 'La contraseña debe tener al menos 6 caracteres.';
+        renderApp();
+        return;
+      }
+
+      if (state.authMode === 'register') {
+        if (cleanName.length < 2) {
+          state.authError = 'Por favor ingresa tu nombre completo (mínimo 2 caracteres).';
+          renderApp();
+          return;
+        }
+        if (password !== confirmPassword) {
+          state.authError = 'Las contraseñas no coinciden. Verifícalas por favor.';
+          renderApp();
+          return;
+        }
+      }
+
+      state.authSubmitting = true;
+      renderApp();
+
+      try {
+        let authedUser = null;
+        if (state.authMode === 'register') {
+          const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+          try {
+            await updateProfile(cred.user, { displayName: cleanName.slice(0, 100) });
+          } catch {
+            // Ignore non-critical profile update error
+          }
+          await syncUserPrivateProfile(cred.user, cleanName);
+          authedUser = cred.user;
+          if (!state.fullName) {
+            state.fullName = cleanName.slice(0, 100);
+          }
+        } else {
+          const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+          await syncUserPrivateProfile(cred.user);
+          authedUser = cred.user;
+        }
+
+        state.user = authedUser;
+        state.authPasswordInput = '';
+        state.authConfirmPasswordInput = '';
+        state.authModalOpen = false;
+        state.formError = null;
+
+        if (state.pendingSaveProfileAfterAuth && authedUser) {
+          state.pendingSaveProfileAfterAuth = false;
+          await saveMedicalProfileForUser(authedUser);
+        } else {
+          renderApp();
+        }
+      } catch (err) {
+        const parsed = formatFirebaseAuthError(err);
+        state.authError = parsed.message;
+        state.authOperationNotAllowed = parsed.isOperationNotAllowed;
+      } finally {
+        state.authSubmitting = false;
+        renderApp();
+      }
+    });
+  }
 
   const stepProfileBtn = document.getElementById('step-profile-btn');
   if (stepProfileBtn) {
@@ -4651,96 +5361,13 @@ function bindEvents() {
       state.formError = null;
       state.saveSuccessBanner = false;
 
-      let activeUser = state.user;
-      if (!activeUser) {
-        try {
-          const res = await signInWithPopup(auth, googleProvider);
-          await syncUserPrivateProfile(res.user);
-          activeUser = res.user;
-          state.user = activeUser;
-        } catch {
-          state.formError =
-            'Inicia sesión con tu cuenta segura para guardar tu perfil médico y continuar a la compra de tu Sticker NFC.';
-          renderApp();
-          return;
-        }
-      }
-
-      const isUpdatingExisting = Boolean(state.currentTagId && state.userSticker);
-      const targetTagId = state.currentTagId || generateUniqueTagId();
-
-      const validation = sanitizeAndValidateStickerInput({
-        tagId: targetTagId,
-        ownerId: activeUser.uid,
-        fullName: state.fullName,
-        bloodType: state.bloodType,
-        allergies: state.allergies,
-        medicalConditions: state.medicalConditions,
-        emergencyContactName: state.emergencyContactName,
-        emergencyContactRelation: state.emergencyContactRelation,
-        emergencyContactPhone: state.emergencyContactPhone,
-        secondaryContactName: state.secondaryContactName,
-        secondaryContactRelation: state.secondaryContactRelation,
-        secondaryContactPhone: state.secondaryContactPhone,
-        motorcycleDetails: state.motorcycleDetails,
-        insuranceDetails: state.insuranceDetails,
-        organDonor: state.organDonor,
-      });
-
-      if (!validation.valid) {
-        state.formError = validation.error;
-        renderApp();
+      if (!state.user) {
+        state.pendingSaveProfileAfterAuth = true;
+        openAuthModal('register');
         return;
       }
 
-      state.submitting = true;
-      renderApp();
-
-      const docPath = `stickers/${targetTagId}`;
-      try {
-        if (isUpdatingExisting) {
-          await updateDoc(doc(db, 'stickers', targetTagId), {
-            fullName: validation.data.fullName,
-            bloodType: validation.data.bloodType,
-            allergies: validation.data.allergies,
-            medicalConditions: validation.data.medicalConditions,
-            emergencyContactName: validation.data.emergencyContactName,
-            emergencyContactRelation: validation.data.emergencyContactRelation,
-            emergencyContactPhone: validation.data.emergencyContactPhone,
-            secondaryContactName: validation.data.secondaryContactName,
-            secondaryContactRelation: validation.data.secondaryContactRelation,
-            secondaryContactPhone: validation.data.secondaryContactPhone,
-            motorcycleDetails: validation.data.motorcycleDetails,
-            insuranceDetails: validation.data.insuranceDetails,
-            organDonor: validation.data.organDonor,
-            isActive: true,
-            accessPin: '',
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          await setDoc(doc(db, 'stickers', targetTagId), {
-            ...validation.data,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        }
-
-        state.userSticker = validation.data;
-        state.currentTagId = validation.data.tagId;
-        state.landingSticker = validation.data;
-        state.landingTagId = validation.data.tagId;
-        state.saveSuccessBanner = true;
-        state.mainStep = 'sticker_checkout';
-      } catch (err) {
-        handleFirestoreError(
-          err,
-          isUpdatingExisting ? OperationType.UPDATE : OperationType.CREATE,
-          docPath
-        );
-      } finally {
-        state.submitting = false;
-        renderApp();
-      }
+      await saveMedicalProfileForUser(state.user);
     });
   }
 

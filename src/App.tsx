@@ -31,6 +31,10 @@ import {
   auth,
   db,
   signInWithGoogle,
+  registerWithEmailAndPassword,
+  loginWithEmailAndPassword,
+  resetPasswordByEmail,
+  formatFirebaseAuthError,
   signInAdminWithGoogle,
   signOutUser,
   OperationType,
@@ -148,6 +152,23 @@ export function BikerSafeApp() {
   // Floating Q&A Page / Doubt Widget State
   const [qaModalOpen, setQaModalOpen] = useState(false);
   const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'register' | 'login' | 'reset'>(
+    'register'
+  );
+  const [authNameInput, setAuthNameInput] = useState('');
+  const [authEmailInput, setAuthEmailInput] = useState('');
+  const [authPasswordInput, setAuthPasswordInput] = useState('');
+  const [authConfirmPasswordInput, setAuthConfirmPasswordInput] = useState('');
+  const [authShowPassword, setAuthShowPassword] = useState(false);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authOperationNotAllowed, setAuthOperationNotAllowed] = useState(false);
+  const [authSuccessMessage, setAuthSuccessMessage] = useState<string | null>(
+    null
+  );
+  const [pendingSaveProfileAfterAuth, setPendingSaveProfileAfterAuth] =
+    useState(false);
   const [qaCategoryFilter, setQaCategoryFilter] = useState<
     'all' | 'nfc' | 'perfil' | 'compra'
   >('all');
@@ -193,7 +214,7 @@ export function BikerSafeApp() {
       question:
         '¿Puedo modificar mis datos médicos o contactos de emergencia después de comprar?',
       answer:
-        'Sí, todas las veces que lo necesites. Solo inicia sesión con tu cuenta de Google en Biker Safe, actualiza tus teléfonos de emergencia, parentesco, alergias, seguro o datos de tu motocicleta y guarda los cambios. Tu información se actualiza al instante sin tener que cambiar tu sticker físico.',
+        'Sí, todas las veces que lo necesites. Solo inicia sesión con tu correo y contraseña o con tu cuenta de Google en Biker Safe, actualiza tus teléfonos de emergencia, parentesco, alergias, seguro o datos de tu motocicleta y guarda los cambios. Tu información se actualiza al instante sin tener que cambiar tu sticker físico.',
     },
     {
       id: 'qa-4',
@@ -552,16 +573,196 @@ export function BikerSafeApp() {
     };
   }, [authReady, user, adminAuthenticated]);
 
+  const openAuthModal = (mode: 'register' | 'login' | 'reset' = 'register') => {
+    setAuthMode(mode);
+    setAuthError(null);
+    setAuthOperationNotAllowed(false);
+    setAuthSuccessMessage(null);
+    if (!authNameInput && fullName) {
+      setAuthNameInput(fullName);
+    }
+    setAuthModalOpen(true);
+  };
+
+  const saveMedicalProfileForUser = async (activeUser: User) => {
+    const isUpdatingExisting = Boolean(currentTagId && userSticker);
+    const targetTagId = currentTagId || generateUniqueTagId();
+
+    const validation = sanitizeAndValidateStickerInput({
+      tagId: targetTagId,
+      ownerId: activeUser.uid,
+      fullName,
+      bloodType,
+      allergies,
+      medicalConditions,
+      emergencyContactName,
+      emergencyContactRelation,
+      emergencyContactPhone,
+      secondaryContactName,
+      secondaryContactRelation,
+      secondaryContactPhone,
+      motorcycleDetails,
+      insuranceDetails,
+      organDonor,
+      isActive: true,
+      accessPin: '',
+    });
+
+    if (validation.valid === false) {
+      setFormError(validation.error);
+      return;
+    }
+
+    setSubmitting(true);
+    const docPath = `stickers/${targetTagId}`;
+
+    try {
+      if (isUpdatingExisting) {
+        await updateDoc(doc(db, 'stickers', targetTagId), {
+          fullName: validation.data.fullName,
+          bloodType: validation.data.bloodType,
+          allergies: validation.data.allergies,
+          medicalConditions: validation.data.medicalConditions,
+          emergencyContactName: validation.data.emergencyContactName,
+          emergencyContactRelation: validation.data.emergencyContactRelation,
+          emergencyContactPhone: validation.data.emergencyContactPhone,
+          secondaryContactName: validation.data.secondaryContactName,
+          secondaryContactRelation: validation.data.secondaryContactRelation,
+          secondaryContactPhone: validation.data.secondaryContactPhone,
+          motorcycleDetails: validation.data.motorcycleDetails,
+          insuranceDetails: validation.data.insuranceDetails,
+          organDonor: validation.data.organDonor,
+          isActive: true,
+          accessPin: '',
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(doc(db, 'stickers', targetTagId), {
+          ...validation.data,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      setUserSticker(validation.data);
+      setCurrentTagId(validation.data.tagId);
+      setLandingSticker(validation.data);
+      setLandingTagId(validation.data.tagId);
+      setSaveSuccessBanner(true);
+
+      // Once generated/updated, advance to the custom NFC Sticker purchase step
+      setMainStep('sticker_checkout');
+    } catch (error) {
+      handleFirestoreError(
+        error,
+        isUpdatingExisting ? OperationType.UPDATE : OperationType.CREATE,
+        docPath
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     setFormError(null);
+    setAuthError(null);
+    setAuthOperationNotAllowed(false);
     try {
-      await signInWithGoogle();
+      const signedInUser = await signInWithGoogle();
+      setAuthModalOpen(false);
+      if (pendingSaveProfileAfterAuth) {
+        setPendingSaveProfileAfterAuth(false);
+        await saveMedicalProfileForUser(signedInUser);
+      }
     } catch (err) {
-      setFormError(
-        err instanceof Error
-          ? `Error al iniciar sesión: ${err.message}`
-          : 'No se pudo completar la autenticación.'
-      );
+      const parsed = formatFirebaseAuthError(err);
+      setAuthError(parsed.message);
+      setFormError(parsed.message);
+    }
+  };
+
+  const handleEmailAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthOperationNotAllowed(false);
+    setAuthSuccessMessage(null);
+
+    const cleanName = authNameInput.trim();
+    const cleanEmail = authEmailInput.trim().toLowerCase();
+    const password = authPasswordInput;
+    const confirmPassword = authConfirmPasswordInput;
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setAuthError('Ingresa un correo electrónico válido.');
+      return;
+    }
+
+    if (authMode === 'reset') {
+      setAuthSubmitting(true);
+      try {
+        await resetPasswordByEmail(cleanEmail);
+        setAuthSuccessMessage(
+          `Enviamos un enlace de recuperación de contraseña a ${cleanEmail}. Revisa tu bandeja de entrada o carpeta de spam.`
+        );
+      } catch (err) {
+        const parsed = formatFirebaseAuthError(err);
+        setAuthError(parsed.message);
+        setAuthOperationNotAllowed(parsed.isOperationNotAllowed);
+      } finally {
+        setAuthSubmitting(false);
+      }
+      return;
+    }
+
+    if (password.length < 6) {
+      setAuthError('La contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+
+    if (authMode === 'register') {
+      if (cleanName.length < 2) {
+        setAuthError(
+          'Por favor ingresa tu nombre completo (mínimo 2 caracteres).'
+        );
+        return;
+      }
+      if (password !== confirmPassword) {
+        setAuthError('Las contraseñas no coinciden. Verifícalas por favor.');
+        return;
+      }
+    }
+
+    setAuthSubmitting(true);
+    try {
+      let signedInUser: User;
+      if (authMode === 'register') {
+        signedInUser = await registerWithEmailAndPassword(
+          cleanName,
+          cleanEmail,
+          password
+        );
+        if (!fullName) {
+          setFullName(cleanName.slice(0, 100));
+        }
+      } else {
+        signedInUser = await loginWithEmailAndPassword(cleanEmail, password);
+      }
+
+      setAuthPasswordInput('');
+      setAuthConfirmPasswordInput('');
+      setAuthModalOpen(false);
+      setFormError(null);
+
+      if (pendingSaveProfileAfterAuth) {
+        setPendingSaveProfileAfterAuth(false);
+        await saveMedicalProfileForUser(signedInUser);
+      }
+    } catch (err) {
+      const parsed = formatFirebaseAuthError(err);
+      setAuthError(parsed.message);
+      setAuthOperationNotAllowed(parsed.isOperationNotAllowed);
+    } finally {
+      setAuthSubmitting(false);
     }
   };
 
@@ -760,94 +961,13 @@ export function BikerSafeApp() {
     setFormError(null);
     setSaveSuccessBanner(false);
 
-    let activeUser = user;
-    if (!activeUser) {
-      try {
-        activeUser = await signInWithGoogle();
-      } catch {
-        setFormError(
-          'Inicia sesión con tu cuenta segura para guardar tu perfil médico y vincular tu Sticker NFC.'
-        );
-        return;
-      }
-    }
-
-    const isUpdatingExisting = Boolean(currentTagId && userSticker);
-    const targetTagId = currentTagId || generateUniqueTagId();
-
-    const validation = sanitizeAndValidateStickerInput({
-      tagId: targetTagId,
-      ownerId: activeUser.uid,
-      fullName,
-      bloodType,
-      allergies,
-      medicalConditions,
-      emergencyContactName,
-      emergencyContactRelation,
-      emergencyContactPhone,
-      secondaryContactName,
-      secondaryContactRelation,
-      secondaryContactPhone,
-      motorcycleDetails,
-      insuranceDetails,
-      organDonor,
-      isActive: true,
-      accessPin: '',
-    });
-
-    if (validation.valid === false) {
-      setFormError(validation.error);
+    if (!user) {
+      setPendingSaveProfileAfterAuth(true);
+      openAuthModal('register');
       return;
     }
 
-    setSubmitting(true);
-    const docPath = `stickers/${targetTagId}`;
-
-    try {
-      if (isUpdatingExisting) {
-        await updateDoc(doc(db, 'stickers', targetTagId), {
-          fullName: validation.data.fullName,
-          bloodType: validation.data.bloodType,
-          allergies: validation.data.allergies,
-          medicalConditions: validation.data.medicalConditions,
-          emergencyContactName: validation.data.emergencyContactName,
-          emergencyContactRelation: validation.data.emergencyContactRelation,
-          emergencyContactPhone: validation.data.emergencyContactPhone,
-          secondaryContactName: validation.data.secondaryContactName,
-          secondaryContactRelation: validation.data.secondaryContactRelation,
-          secondaryContactPhone: validation.data.secondaryContactPhone,
-          motorcycleDetails: validation.data.motorcycleDetails,
-          insuranceDetails: validation.data.insuranceDetails,
-          organDonor: validation.data.organDonor,
-          isActive: true,
-          accessPin: '',
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(doc(db, 'stickers', targetTagId), {
-          ...validation.data,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-
-      setUserSticker(validation.data);
-      setCurrentTagId(validation.data.tagId);
-      setLandingSticker(validation.data);
-      setLandingTagId(validation.data.tagId);
-      setSaveSuccessBanner(true);
-
-      // Once generated/updated, advance to the custom NFC Sticker purchase step
-      setMainStep('sticker_checkout');
-    } catch (error) {
-      handleFirestoreError(
-        error,
-        isUpdatingExisting ? OperationType.UPDATE : OperationType.CREATE,
-        docPath
-      );
-    } finally {
-      setSubmitting(false);
-    }
+    await saveMedicalProfileForUser(user);
   };
 
   return (
@@ -887,7 +1007,7 @@ export function BikerSafeApp() {
           </nav>
 
           {/* Zone 3: User Account Action */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {user ? (
               <div className="flex items-center gap-3">
                 <span className="hidden sm:inline text-xs text-zinc-400 truncate max-w-[180px]">
@@ -903,14 +1023,29 @@ export function BikerSafeApp() {
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-black bg-orange-500 hover:bg-orange-400 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                <span>Iniciar Sesión Segura</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingSaveProfileAfterAuth(false);
+                    openAuthModal('login');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <span>Iniciar Sesión</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingSaveProfileAfterAuth(false);
+                    openAuthModal('register');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-black bg-orange-500 hover:bg-orange-400 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Crear Cuenta</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -1090,20 +1225,49 @@ export function BikerSafeApp() {
                 </p>
 
                 {!user && (
-                  <div className="mb-6 p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="text-xs text-zinc-300">
-                      <strong className="text-white block mb-0.5">
-                        Cuenta Segura de Usuario
+                  <div className="mb-6 p-4 sm:p-5 bg-[#0B0C0E] border border-zinc-800 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="text-xs text-zinc-300 space-y-1">
+                      <strong className="text-white block text-sm">
+                        Cuenta Segura de Usuario (Correo y Contraseña o Google)
                       </strong>
-                      Inicia sesión para guardar o modificar tus datos médicos en cualquier momento.
+                      <p className="text-zinc-400 leading-relaxed">
+                        ¿No cuentas con correo de Google? Puedes{' '}
+                        <strong className="text-orange-400">
+                          registrarte con cualquier correo electrónico y contraseña
+                        </strong>{' '}
+                        o acceder con Google para guardar y modificar tus datos
+                        médicos cuando lo necesites.
+                      </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleGoogleSignIn}
-                      className="px-4 py-2 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors shrink-0 cursor-pointer"
-                    >
-                      Conectar mi Cuenta
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingSaveProfileAfterAuth(false);
+                          openAuthModal('register');
+                        }}
+                        className="px-4 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        Crear Cuenta con Correo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingSaveProfileAfterAuth(false);
+                          openAuthModal('login');
+                        }}
+                        className="px-3.5 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        Ya tengo Cuenta
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleGoogleSignIn}
+                        className="px-3.5 py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        Entrar con Google
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -2124,6 +2288,336 @@ export function BikerSafeApp() {
                   </button>
                 </div>
               </section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Email & Password Registration / Login Modal */}
+      {authModalOpen && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setAuthModalOpen(false);
+              setPendingSaveProfileAfterAuth(false);
+            }
+          }}
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="auth-modal-title"
+        >
+          <div className="relative w-full max-w-md bg-[#14161A] border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="bg-[#08090B] border-b border-zinc-800 px-6 py-4 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-bold text-orange-500 tracking-wide">
+                  CUENTA SEGURA BIKER SAFE
+                </div>
+                <h2
+                  id="auth-modal-title"
+                  className="text-base sm:text-lg font-bold text-white tracking-tight"
+                >
+                  {authMode === 'register'
+                    ? 'Crear Cuenta con Correo y Contraseña'
+                    : authMode === 'login'
+                    ? 'Iniciar Sesión en mi Cuenta'
+                    : 'Recuperar mi Contraseña'}
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthModalOpen(false);
+                  setPendingSaveProfileAfterAuth(false);
+                }}
+                className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-colors cursor-pointer shrink-0"
+                aria-label="Cerrar ventana de acceso"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5">
+              {pendingSaveProfileAfterAuth ? (
+                <div className="p-3.5 bg-[#0B0C0E] border border-orange-500/50 rounded-xl text-xs text-zinc-200 leading-relaxed">
+                  <strong className="text-orange-400 block mb-0.5">
+                    Guarda tu perfil médico de forma segura
+                  </strong>
+                  Crea tu cuenta con cualquier correo electrónico y contraseña
+                  (o entra con Google) para guardar tus datos médicos y
+                  continuar al Paso 2.
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  ¿No cuentas con correo de Google? Regístrate con cualquier
+                  correo electrónico y una contraseña para crear y editar tu
+                  perfil médico cuando lo necesites.
+                </p>
+              )}
+
+              {/* Mode Switcher Tabs (Crear Cuenta / Iniciar Sesión) */}
+              {authMode !== 'reset' && (
+                <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#0B0C0E] border border-zinc-800 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('register');
+                      setAuthError(null);
+                      setAuthOperationNotAllowed(false);
+                      setAuthSuccessMessage(null);
+                    }}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                      authMode === 'register'
+                        ? 'bg-orange-500 text-black'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Crear Cuenta (Registro)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('login');
+                      setAuthError(null);
+                      setAuthOperationNotAllowed(false);
+                      setAuthSuccessMessage(null);
+                    }}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                      authMode === 'login'
+                        ? 'bg-orange-500 text-black'
+                        : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Iniciar Sesión
+                  </button>
+                </div>
+              )}
+
+              {authError && (
+                <div className="p-3.5 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200 space-y-2 leading-relaxed">
+                  <div>{authError}</div>
+                  {authOperationNotAllowed && (
+                    <div className="pt-2 border-t border-red-800/60 text-[11px] text-zinc-300 space-y-1.5">
+                      <strong className="text-orange-400 block">
+                        Nota para el Administrador del Proyecto:
+                      </strong>
+                      <p>
+                        Para habilitar el registro con correo y contraseña en
+                        Firebase, abre tu consola de Firebase, entra a{' '}
+                        <strong>Authentication → Sign-in method</strong>,
+                        selecciona <strong>Correo electrónico/contraseña</strong>{' '}
+                        y actívalo:
+                      </p>
+                      <a
+                        href="https://console.firebase.google.com/project/earnest-synapse-xvr20/authentication/providers"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-400 text-black font-bold rounded-lg transition-colors mt-1"
+                      >
+                        <span>
+                          Abrir Firebase Console (Proveedores de Acceso)
+                        </span>
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {authSuccessMessage && (
+                <div className="p-3.5 bg-zinc-900 border border-orange-500/60 rounded-xl text-xs text-orange-300 leading-relaxed">
+                  {authSuccessMessage}
+                </div>
+              )}
+
+              {/* Email & Password Form */}
+              <form onSubmit={handleEmailAuthSubmit} className="space-y-4">
+                {authMode === 'register' && (
+                  <div>
+                    <label
+                      htmlFor="auth-name-input"
+                      className="block text-xs font-semibold text-zinc-300 mb-1.5"
+                    >
+                      Nombre Completo
+                    </label>
+                    <input
+                      id="auth-name-input"
+                      type="text"
+                      required
+                      maxLength={100}
+                      value={authNameInput}
+                      onChange={(e) => setAuthNameInput(e.target.value)}
+                      placeholder="Ej. Miguel Ángel Rojas"
+                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label
+                    htmlFor="auth-email-input"
+                    className="block text-xs font-semibold text-zinc-300 mb-1.5"
+                  >
+                    Correo Electrónico
+                  </label>
+                  <input
+                    id="auth-email-input"
+                    type="email"
+                    required
+                    maxLength={150}
+                    value={authEmailInput}
+                    onChange={(e) => setAuthEmailInput(e.target.value)}
+                    placeholder="tucorreo@ejemplo.com"
+                    className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+
+                {authMode !== 'reset' && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label
+                        htmlFor="auth-password-input"
+                        className="block text-xs font-semibold text-zinc-300"
+                      >
+                        {authMode === 'register'
+                          ? 'Crear Contraseña (mínimo 6 caracteres)'
+                          : 'Contraseña'}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setAuthShowPassword(!authShowPassword)}
+                        className="text-[11px] font-semibold text-orange-400 hover:text-orange-300 cursor-pointer"
+                      >
+                        {authShowPassword ? 'Ocultar' : 'Mostrar'}
+                      </button>
+                    </div>
+                    <input
+                      id="auth-password-input"
+                      type={authShowPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      maxLength={100}
+                      value={authPasswordInput}
+                      onChange={(e) => setAuthPasswordInput(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                )}
+
+                {authMode === 'register' && (
+                  <div>
+                    <label
+                      htmlFor="auth-confirm-password-input"
+                      className="block text-xs font-semibold text-zinc-300 mb-1.5"
+                    >
+                      Confirmar Contraseña
+                    </label>
+                    <input
+                      id="auth-confirm-password-input"
+                      type={authShowPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      maxLength={100}
+                      value={authConfirmPasswordInput}
+                      onChange={(e) =>
+                        setAuthConfirmPasswordInput(e.target.value)
+                      }
+                      placeholder="Repite tu contraseña"
+                      className="w-full px-4 py-2.5 text-sm bg-[#0B0C0E] border border-zinc-800 rounded-lg text-white placeholder:text-zinc-600 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                )}
+
+                {authMode === 'login' && (
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('reset');
+                        setAuthError(null);
+                        setAuthOperationNotAllowed(false);
+                        setAuthSuccessMessage(null);
+                      }}
+                      className="text-xs text-orange-400 hover:text-orange-300 underline cursor-pointer"
+                    >
+                      ¿Olvidaste tu contraseña? Recupérala por correo
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={authSubmitting}
+                  className="w-full py-3 px-5 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+                >
+                  {authSubmitting
+                    ? 'Procesando...'
+                    : authMode === 'register'
+                    ? 'Crear mi Cuenta y Registrarme'
+                    : authMode === 'login'
+                    ? 'Iniciar Sesión con Correo y Contraseña'
+                    : 'Enviar Enlace de Recuperación'}
+                </button>
+
+                {authMode === 'reset' && (
+                  <div className="text-center pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('login');
+                        setAuthError(null);
+                        setAuthOperationNotAllowed(false);
+                        setAuthSuccessMessage(null);
+                      }}
+                      className="text-xs font-semibold text-zinc-400 hover:text-white cursor-pointer"
+                    >
+                      ← Volver a Iniciar Sesión
+                    </button>
+                  </div>
+                )}
+              </form>
+
+              {/* Divider for Google Option */}
+              <div className="relative py-1 flex items-center justify-center">
+                <div className="border-t border-zinc-800 w-full"></div>
+                <span className="bg-[#14161A] px-3 text-[11px] text-zinc-500 whitespace-nowrap">
+                  O si cuentas con correo de Google
+                </span>
+                <div className="border-t border-zinc-800 w-full"></div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                className="w-full py-2.5 px-4 bg-[#0B0C0E] hover:bg-zinc-900 border border-zinc-700 text-zinc-100 text-xs font-semibold rounded-xl inline-flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
+              >
+                <svg
+                  className="w-4 h-4 shrink-0"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    fill="#EA4335"
+                    d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.8C6.2 7.2 8.9 5 12 5z"
+                  />
+                  <path
+                    fill="#4285F4"
+                    d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.6l3.7 2.9c2.2-2 3.7-5 3.7-8.7z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.3 14.8c-.2-.8-.4-1.8-.4-2.8s.2-2 .4-2.8L1.6 6.4C.6 8.4 0 10.6 0 12s.6 3.6 1.6 5.6l3.7-2.8z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5l-3.7 2.8C3.5 19.9 7.4 23 12 23z"
+                  />
+                </svg>
+                <span>Continuar con Cuenta de Google</span>
+              </button>
             </div>
           </div>
         </div>

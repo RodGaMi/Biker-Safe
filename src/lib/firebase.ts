@@ -174,9 +174,79 @@ export interface StickerPackageOption {
   specs: string;
   stickerCount: number;
   availableColors: string[];
+  availableModels?: string[];
   sortOrder: number;
   updatedAt?: Timestamp | null;
 }
+
+export const ALL_STICKER_MODELS = ['Racer', 'Choper', 'Cross'] as const;
+
+export type StickerModelName = (typeof ALL_STICKER_MODELS)[number];
+
+export interface StickerModelCatalogRecord {
+  modelId: 'racer' | 'choper' | 'cross';
+  name: StickerModelName;
+  description: string;
+  referenceImageUrl: string;
+  imageRojo: string;
+  imageNegro: string;
+  imageGris: string;
+  imageVerde: string;
+  imageAzul: string;
+  imageRosa: string;
+  imageMorado: string;
+  imageAmarillo: string;
+  sortOrder: number;
+  updatedAt?: Timestamp | null;
+}
+
+export const DEFAULT_STICKER_MODELS: StickerModelCatalogRecord[] = [
+  {
+    modelId: 'racer',
+    name: 'Racer',
+    description: 'Diseño aerodinámico deportivo para cascos integrales y pista.',
+    referenceImageUrl: '',
+    imageRojo: '',
+    imageNegro: '',
+    imageGris: '',
+    imageVerde: '',
+    imageAzul: '',
+    imageRosa: '',
+    imageMorado: '',
+    imageAmarillo: '',
+    sortOrder: 1,
+  },
+  {
+    modelId: 'choper',
+    name: 'Choper',
+    description: 'Diseño clásico custom / cruiser para cascos abiertos, 3/4 y modulares.',
+    referenceImageUrl: '',
+    imageRojo: '',
+    imageNegro: '',
+    imageGris: '',
+    imageVerde: '',
+    imageAzul: '',
+    imageRosa: '',
+    imageMorado: '',
+    imageAmarillo: '',
+    sortOrder: 2,
+  },
+  {
+    modelId: 'cross',
+    name: 'Cross',
+    description: 'Diseño off-road / enduro / motocross de alta visibilidad.',
+    referenceImageUrl: '',
+    imageRojo: '',
+    imageNegro: '',
+    imageGris: '',
+    imageVerde: '',
+    imageAzul: '',
+    imageRosa: '',
+    imageMorado: '',
+    imageAmarillo: '',
+    sortOrder: 3,
+  },
+];
 
 export const ORDER_STATUSES = [
   'pendiente_pago',
@@ -216,6 +286,7 @@ export interface StickerOrderRecord {
   pkgId: string;
   pkgName: string;
   stickerCount: number;
+  selectedModels?: string[];
   selectedColors: string[];
   totalPrice: number;
   paymentMethod: 'SPEI_WHATSAPP';
@@ -270,8 +341,12 @@ export function buildWhatsAppOrderUrl(
   settings: PaymentSettingsRecord
 ): string {
   const cleanPhone = (settings.whatsappNumber || '').replace(/[^0-9]/g, '');
-  const colorsBreakdown = (order.selectedColors || [])
-    .map((c, i) => `Sticker #${i + 1}: ${c}`)
+  const modelsList = Array.isArray(order.selectedModels) ? order.selectedModels : [];
+  const itemsBreakdown = (order.selectedColors || [])
+    .map((c, i) => {
+      const m = modelsList[i] || 'Racer';
+      return `Sticker #${i + 1}: Modelo ${m} · Color ${c}`;
+    })
     .join(', ');
 
   const isPersonalDelivery =
@@ -301,7 +376,7 @@ export function buildWhatsAppOrderUrl(
     `*ID Tag NFC:* ${order.tagId}`,
     `*Perfil Biker:* ${order.riderName}`,
     `*Paquete:* ${order.pkgName} (${order.stickerCount} ${order.stickerCount === 1 ? 'sticker' : 'stickers'})`,
-    `*Colores elegidos:* ${colorsBreakdown}`,
+    `*Modelos y colores elegidos:* ${itemsBreakdown}`,
     `*Total del paquete:* $${order.totalPrice} MXN`,
     ``,
     ...deliveryLines,
@@ -341,15 +416,159 @@ export const STICKER_COLOR_SWATCHES: Record<string, string> = {
   Amarillo: '#EAB308',
 };
 
+export type StickerModelColorField =
+  | 'imageRojo'
+  | 'imageNegro'
+  | 'imageGris'
+  | 'imageVerde'
+  | 'imageAzul'
+  | 'imageRosa'
+  | 'imageMorado'
+  | 'imageAmarillo';
+
+export function getStickerModelColorField(
+  colorName: string
+): StickerModelColorField {
+  const map: Record<string, StickerModelColorField> = {
+    Rojo: 'imageRojo',
+    Negro: 'imageNegro',
+    Gris: 'imageGris',
+    Verde: 'imageVerde',
+    Azul: 'imageAzul',
+    Rosa: 'imageRosa',
+    Morado: 'imageMorado',
+    Amarillo: 'imageAmarillo',
+  };
+  return map[colorName] || 'imageRojo';
+}
+
+export function normalizeStickerModelCatalog(
+  raw: Partial<StickerModelCatalogRecord>,
+  fallbackIndex = 0
+): StickerModelCatalogRecord {
+  const fallback =
+    DEFAULT_STICKER_MODELS.find(
+      (m) =>
+        m.modelId === raw.modelId ||
+        m.name.toLowerCase() === String(raw.name || '').toLowerCase()
+    ) ||
+    DEFAULT_STICKER_MODELS[fallbackIndex] ||
+    DEFAULT_STICKER_MODELS[0];
+
+  return {
+    modelId: fallback.modelId,
+    name: fallback.name,
+    description:
+      typeof raw.description === 'string' && raw.description.trim().length > 0
+        ? raw.description.trim().slice(0, 200)
+        : fallback.description,
+    referenceImageUrl: String(raw.referenceImageUrl || '').slice(0, 350000),
+    imageRojo: String(raw.imageRojo || '').slice(0, 250000),
+    imageNegro: String(raw.imageNegro || '').slice(0, 250000),
+    imageGris: String(raw.imageGris || '').slice(0, 250000),
+    imageVerde: String(raw.imageVerde || '').slice(0, 250000),
+    imageAzul: String(raw.imageAzul || '').slice(0, 250000),
+    imageRosa: String(raw.imageRosa || '').slice(0, 250000),
+    imageMorado: String(raw.imageMorado || '').slice(0, 250000),
+    imageAmarillo: String(raw.imageAmarillo || '').slice(0, 250000),
+    sortOrder:
+      typeof raw.sortOrder === 'number' ? raw.sortOrder : fallback.sortOrder,
+    updatedAt: raw.updatedAt,
+  };
+}
+
+export function resolveStickerModelImage(
+  models: StickerModelCatalogRecord[],
+  modelName: string,
+  colorName: string
+): string {
+  const found =
+    (models || []).find(
+      (m) =>
+        m.name.toLowerCase() === String(modelName || '').toLowerCase() ||
+        m.modelId === String(modelName || '').toLowerCase()
+    ) || DEFAULT_STICKER_MODELS[0];
+
+  const colorField = getStickerModelColorField(colorName);
+  const specificColorImg = found[colorField];
+  if (specificColorImg && specificColorImg.trim().length > 0) {
+    return specificColorImg.trim();
+  }
+  if (found.referenceImageUrl && found.referenceImageUrl.trim().length > 0) {
+    return found.referenceImageUrl.trim();
+  }
+  for (const c of ALL_STICKER_COLORS) {
+    const f = getStickerModelColorField(c);
+    if (found[f] && found[f].trim().length > 0) {
+      return found[f].trim();
+    }
+  }
+  return '';
+}
+
+export function compressImageFileToDataUrl(
+  file: File,
+  maxDimension = 440,
+  quality = 0.8
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type.startsWith('image/')) {
+      reject(new Error('Selecciona un archivo de imagen válido (PNG, JPG, WEBP).'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo de imagen.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Formato de imagen no soportado.'));
+      img.onload = () => {
+        let width = img.width || 400;
+        let height = img.height || 400;
+        if (width > maxDimension || height > maxDimension) {
+          if (width >= height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, width);
+        canvas.height = Math.max(1, height);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('No se pudo procesar la imagen.'));
+          return;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        let dataUrl = canvas.toDataURL('image/webp', quality);
+        if (!dataUrl.startsWith('data:image/webp') || dataUrl.length > 220000) {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.76);
+        }
+        if (dataUrl.length > 240000) {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        }
+        resolve(dataUrl);
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
   {
     pkgId: 'single',
     name: 'Kit Individual Casco NFC',
     subtitle: 'Para 1 casco principal',
     price: 249,
-    specs: '1 Sticker NFC de emergencia · Color elegible',
+    specs: '1 Sticker NFC de emergencia · Modelo (Racer, Choper, Cross) y color elegible',
     stickerCount: 1,
     availableColors: [...ALL_STICKER_COLORS],
+    availableModels: [...ALL_STICKER_MODELS],
     sortOrder: 1,
   },
   {
@@ -357,9 +576,10 @@ export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
     name: 'Kit Biker Safe Pro',
     subtitle: 'Más elegido · 2 Stickers NFC',
     price: 399,
-    specs: '2 Stickers NFC para Casco / Moto · Color elegible por unidad',
+    specs: '2 Stickers NFC para Casco / Moto · Modelo y color elegible por unidad',
     stickerCount: 2,
     availableColors: [...ALL_STICKER_COLORS],
+    availableModels: [...ALL_STICKER_MODELS],
     sortOrder: 2,
   },
   {
@@ -367,9 +587,10 @@ export const DEFAULT_STICKER_PACKAGES: StickerPackageOption[] = [
     name: 'Kit Dúo / Rodada',
     subtitle: 'Cobertura en múltiples cascos',
     price: 649,
-    specs: '4 Stickers NFC programados con tu perfil médico',
+    specs: '4 Stickers NFC programados con tu perfil médico · Modelo y color por unidad',
     stickerCount: 4,
     availableColors: [...ALL_STICKER_COLORS],
+    availableModels: [...ALL_STICKER_MODELS],
     sortOrder: 3,
   },
 ];
@@ -386,6 +607,12 @@ export function normalizePackageOption(
   const validColors = Array.isArray(raw.availableColors)
     ? raw.availableColors.filter((c) =>
         (ALL_STICKER_COLORS as readonly string[]).includes(c)
+      )
+    : [];
+
+  const validModels = Array.isArray(raw.availableModels)
+    ? raw.availableModels.filter((m) =>
+        (ALL_STICKER_MODELS as readonly string[]).includes(m)
       )
     : [];
 
@@ -410,6 +637,8 @@ export function normalizePackageOption(
         : fallback.stickerCount,
     availableColors:
       validColors.length > 0 ? validColors : [...ALL_STICKER_COLORS],
+    availableModels:
+      validModels.length > 0 ? validModels : [...ALL_STICKER_MODELS],
     sortOrder:
       typeof raw.sortOrder === 'number' ? raw.sortOrder : fallback.sortOrder,
     updatedAt: raw.updatedAt,

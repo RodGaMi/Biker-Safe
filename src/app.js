@@ -135,6 +135,356 @@ const STICKER_COLOR_SWATCHES = {
   Amarillo: '#EAB308',
 };
 
+const ALL_STICKER_MODELS = ['Racer', 'Choper', 'Cross'];
+
+const DEFAULT_STICKER_MODELS = [
+  {
+    modelId: 'racer',
+    name: 'Racer',
+    description: 'Diseño aerodinámico deportivo para cascos integrales y pista.',
+    referenceImageUrl: '',
+    imageRojo: '',
+    imageNegro: '',
+    imageGris: '',
+    imageVerde: '',
+    imageAzul: '',
+    imageRosa: '',
+    imageMorado: '',
+    imageAmarillo: '',
+    sortOrder: 1,
+  },
+  {
+    modelId: 'choper',
+    name: 'Choper',
+    description: 'Diseño clásico custom / cruiser para cascos abiertos, 3/4 y modulares.',
+    referenceImageUrl: '',
+    imageRojo: '',
+    imageNegro: '',
+    imageGris: '',
+    imageVerde: '',
+    imageAzul: '',
+    imageRosa: '',
+    imageMorado: '',
+    imageAmarillo: '',
+    sortOrder: 2,
+  },
+  {
+    modelId: 'cross',
+    name: 'Cross',
+    description: 'Diseño off-road / enduro / motocross de alta visibilidad.',
+    referenceImageUrl: '',
+    imageRojo: '',
+    imageNegro: '',
+    imageGris: '',
+    imageVerde: '',
+    imageAzul: '',
+    imageRosa: '',
+    imageMorado: '',
+    imageAmarillo: '',
+    sortOrder: 3,
+  },
+];
+
+function getStickerModelColorField(colorName) {
+  const map = {
+    Rojo: 'imageRojo',
+    Negro: 'imageNegro',
+    Gris: 'imageGris',
+    Verde: 'imageVerde',
+    Azul: 'imageAzul',
+    Rosa: 'imageRosa',
+    Morado: 'imageMorado',
+    Amarillo: 'imageAmarillo',
+  };
+  return map[colorName] || 'imageRojo';
+}
+
+function normalizeStickerModelCatalog(raw, fallbackIndex = 0) {
+  const fallback =
+    DEFAULT_STICKER_MODELS.find(
+      (m) =>
+        m.modelId === raw?.modelId ||
+        m.name.toLowerCase() === String(raw?.name || '').toLowerCase()
+    ) ||
+    DEFAULT_STICKER_MODELS[fallbackIndex] ||
+    DEFAULT_STICKER_MODELS[0];
+
+  return {
+    modelId: fallback.modelId,
+    name: fallback.name,
+    description:
+      typeof raw?.description === 'string' && raw.description.trim().length > 0
+        ? raw.description.trim().slice(0, 200)
+        : fallback.description,
+    referenceImageUrl: String(raw?.referenceImageUrl || '').slice(0, 350000),
+    imageRojo: String(raw?.imageRojo || '').slice(0, 250000),
+    imageNegro: String(raw?.imageNegro || '').slice(0, 250000),
+    imageGris: String(raw?.imageGris || '').slice(0, 250000),
+    imageVerde: String(raw?.imageVerde || '').slice(0, 250000),
+    imageAzul: String(raw?.imageAzul || '').slice(0, 250000),
+    imageRosa: String(raw?.imageRosa || '').slice(0, 250000),
+    imageMorado: String(raw?.imageMorado || '').slice(0, 250000),
+    imageAmarillo: String(raw?.imageAmarillo || '').slice(0, 250000),
+    sortOrder: typeof raw?.sortOrder === 'number' ? raw.sortOrder : fallback.sortOrder,
+  };
+}
+
+function resolveStickerModelImage(models, modelName, colorName) {
+  const found =
+    (models || []).find(
+      (m) =>
+        m.name.toLowerCase() === String(modelName || '').toLowerCase() ||
+        m.modelId === String(modelName || '').toLowerCase()
+    ) || DEFAULT_STICKER_MODELS[0];
+
+  if (colorName && colorName !== 'general') {
+    const colorField = getStickerModelColorField(colorName);
+    const specificColorImg = found[colorField];
+    if (specificColorImg && specificColorImg.trim().length > 0) {
+      return specificColorImg.trim();
+    }
+  }
+  if (found.referenceImageUrl && found.referenceImageUrl.trim().length > 0) {
+    return found.referenceImageUrl.trim();
+  }
+  for (const c of ALL_STICKER_COLORS) {
+    const f = getStickerModelColorField(c);
+    if (found[f] && found[f].trim().length > 0) {
+      return found[f].trim();
+    }
+  }
+  return '';
+}
+
+function compressImageFileToDataUrl(file, maxDimension = 440, quality = 0.8) {
+  return new Promise((resolve, reject) => {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      reject(new Error('Selecciona un archivo de imagen válido (PNG, JPG, WEBP).'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo de imagen.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Formato de imagen no soportado.'));
+      img.onload = () => {
+        let width = img.width || 400;
+        let height = img.height || 400;
+        if (width > maxDimension || height > maxDimension) {
+          if (width >= height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, width);
+        canvas.height = Math.max(1, height);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('No se pudo procesar la imagen.'));
+          return;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        let dataUrl = canvas.toDataURL('image/webp', quality);
+        if (!dataUrl.startsWith('data:image/webp') || dataUrl.length > 220000) {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.76);
+        }
+        if (dataUrl.length > 240000) {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        }
+        resolve(dataUrl);
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+const OFFICIAL_LOGO_STORAGE_KEY = 'bikersafe_official_logo_v1';
+
+function getStoredLocalLogo() {
+  try {
+    return window.localStorage.getItem(OFFICIAL_LOGO_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function setStoredLocalLogo(dataUrl) {
+  try {
+    if (dataUrl) {
+      window.localStorage.setItem(OFFICIAL_LOGO_STORAGE_KEY, dataUrl);
+    } else {
+      window.localStorage.removeItem(OFFICIAL_LOGO_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function readExactLogoFileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      reject(new Error('Selecciona tu archivo de logotipo válido (WEBP, PNG, SVG, JPG).'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo del logotipo.'));
+    reader.onload = () => {
+      const rawDataUrl = String(reader.result || '');
+      // Preserve 100% original file bytes untouched (no canvas, no re-encoding, 0% modification)
+      if (rawDataUrl.length <= 700000) {
+        resolve(rawDataUrl);
+        return;
+      }
+      // Fallback only if file exceeds Firestore 1MB document limit
+      const img = new Image();
+      img.onerror = () => reject(new Error('Formato de imagen no soportado.'));
+      img.onload = () => {
+        const maxDim = 960;
+        let width = img.width || 600;
+        let height = img.height || 200;
+        if (width > maxDim || height > maxDim) {
+          if (width >= height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, width);
+        canvas.height = Math.max(1, height);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('No se pudo procesar el archivo.'));
+          return;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/webp', 0.95));
+      };
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderStickerModelEmblemSvg(modelName, colorHex, sizeClass = 'w-12 h-12') {
+  const cleanModel = String(modelName || 'Racer').toLowerCase();
+  const strokeColor = colorHex === '#18181B' ? '#F97316' : colorHex;
+  if (cleanModel === 'choper') {
+    return `
+      <svg viewBox="0 0 64 64" fill="none" class="${sizeClass}" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" fill="${colorHex}" fill-opacity="0.18" stroke="${strokeColor}" stroke-width="2.5"/>
+        <path d="M16 38C16 26 23 18 32 18C41 18 48 26 48 38H16Z" fill="${colorHex}" stroke="#FFFFFF" stroke-width="2"/>
+        <path d="M12 38H52" stroke="${strokeColor}" stroke-width="3" stroke-linecap="round"/>
+        <path d="M22 28H42" stroke="#0B0C0E" stroke-width="2.5" stroke-linecap="round"/>
+        <text x="32" y="51" text-anchor="middle" fill="#FFFFFF" font-size="8" font-weight="bold" font-family="monospace">CHOPER</text>
+      </svg>
+    `;
+  }
+  if (cleanModel === 'cross') {
+    return `
+      <svg viewBox="0 0 64 64" fill="none" class="${sizeClass}" aria-hidden="true">
+        <circle cx="32" cy="32" r="28" fill="${colorHex}" fill-opacity="0.18" stroke="${strokeColor}" stroke-width="2.5"/>
+        <path d="M15 24L49 18L43 28H18L15 24Z" fill="${strokeColor}"/>
+        <path d="M18 28H44L47 41H22L18 28Z" fill="${colorHex}" stroke="#FFFFFF" stroke-width="2"/>
+        <text x="32" y="52" text-anchor="middle" fill="#FFFFFF" font-size="8" font-weight="bold" font-family="monospace">CROSS</text>
+      </svg>
+    `;
+  }
+  return `
+    <svg viewBox="0 0 64 64" fill="none" class="${sizeClass}" aria-hidden="true">
+      <circle cx="32" cy="32" r="28" fill="${colorHex}" fill-opacity="0.18" stroke="${strokeColor}" stroke-width="2.5"/>
+      <path d="M16 36C16 23 24 16 34 16C43 16 48 23 48 34L43 41H19L16 36Z" fill="${colorHex}" stroke="#FFFFFF" stroke-width="2"/>
+      <path d="M25 25H46L43 32H25V25Z" fill="#0B0C0E" stroke="${strokeColor}" stroke-width="1.5"/>
+      <text x="32" y="52" text-anchor="middle" fill="#FFFFFF" font-size="8" font-weight="bold" font-family="monospace">RACER</text>
+    </svg>
+  `;
+}
+
+function getStickerModelRecordByName(modelName) {
+  const list =
+    typeof state !== 'undefined' &&
+    Array.isArray(state.stickerModels) &&
+    state.stickerModels.length > 0
+      ? state.stickerModels
+      : DEFAULT_STICKER_MODELS;
+  return (
+    list.find(
+      (m) =>
+        m.name.toLowerCase() === String(modelName || '').toLowerCase() ||
+        m.modelId === String(modelName || '').toLowerCase()
+    ) ||
+    DEFAULT_STICKER_MODELS.find(
+      (m) =>
+        m.name.toLowerCase() === String(modelName || '').toLowerCase() ||
+        m.modelId === String(modelName || '').toLowerCase()
+    ) ||
+    DEFAULT_STICKER_MODELS[0]
+  );
+}
+
+function renderStickerModelPreviewHtml(modelName, colorName, sizeClass = 'w-14 h-14') {
+  const cleanModel = ALL_STICKER_MODELS.includes(modelName) ? modelName : 'Racer';
+  const cleanColor = ALL_STICKER_COLORS.includes(colorName) ? colorName : 'Rojo';
+  const hex = STICKER_COLOR_SWATCHES[cleanColor] || '#EF4444';
+  const modelsList =
+    typeof state !== 'undefined' && Array.isArray(state.stickerModels)
+      ? state.stickerModels
+      : DEFAULT_STICKER_MODELS;
+  const imageUrl = resolveStickerModelImage(modelsList, cleanModel, cleanColor);
+
+  if (imageUrl && imageUrl.trim().length > 0) {
+    return `
+      <div class="relative ${sizeClass} rounded-xl bg-[#08090B] border border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+        <img
+          src="${escapeHtml(imageUrl)}"
+          alt="Sticker Modelo ${escapeHtml(cleanModel)} Color ${escapeHtml(cleanColor)}"
+          referrerpolicy="no-referrer"
+          class="w-full h-full object-contain p-1"
+        />
+        <span
+          class="absolute bottom-1 right-1 w-3 h-3 rounded-full border border-white/60 shadow"
+          style="background-color: ${hex}"
+          title="Color ${escapeHtml(cleanColor)}"
+        ></span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="relative ${sizeClass} rounded-xl bg-[#08090B] border border-zinc-800 flex flex-col items-center justify-center p-1.5 shrink-0">
+      ${renderStickerModelEmblemSvg(cleanModel, hex, 'w-full h-full')}
+    </div>
+  `;
+}
+
+function renderStickerModelPreviewBox(modelName, colorName, imageUrl, size = 'md') {
+  const sizeClass =
+    size === 'lg' ? 'w-full h-44' : size === 'sm' ? 'w-16 h-16' : 'w-24 h-24';
+  return renderStickerModelPreviewHtml(modelName, colorName, sizeClass);
+}
+
+function formatOrderStickersSummary(order) {
+  const colors = Array.isArray(order?.selectedColors) ? order.selectedColors : [];
+  const models = Array.isArray(order?.selectedModels) ? order.selectedModels : [];
+  if (colors.length === 0) return '1 Sticker NFC';
+  return colors
+    .map((colorName, idx) => {
+      const modelName = models[idx] || 'Racer';
+      return `#${idx + 1} ${modelName} (${colorName})`;
+    })
+    .join(', ');
+}
+
 const ORDER_STATUSES = [
   'pendiente_pago',
   'pagado',
@@ -165,6 +515,7 @@ const DEFAULT_PAYMENT_SETTINGS = {
   whatsappNumber: '5215512345678',
   paymentInstructions:
     'Realiza tu transferencia SPEI por el monto exacto indicando tu Folio de Pedido en el concepto y envía tu comprobante por WhatsApp para programar tus stickers NFC y acordar tu entrega.',
+  brandLogoUrl: '',
 };
 
 function generateUniqueOrderId() {
@@ -187,8 +538,12 @@ function isPersonalDeliveryOrder(order) {
 
 function buildWhatsAppOrderUrl(order, settings) {
   const cleanPhone = String(settings?.whatsappNumber || '').replace(/[^0-9]/g, '');
-  const colorsBreakdown = (order.selectedColors || [])
-    .map((c, i) => `Sticker #${i + 1}: ${c}`)
+  const modelsList = Array.isArray(order.selectedModels) ? order.selectedModels : [];
+  const itemsBreakdown = (order.selectedColors || [])
+    .map((c, i) => {
+      const m = modelsList[i] || 'Racer';
+      return `Sticker #${i + 1}: Modelo ${m} · Color ${c}`;
+    })
     .join(', ');
 
   const isPersonal = isPersonalDeliveryOrder(order);
@@ -215,7 +570,7 @@ function buildWhatsAppOrderUrl(order, settings) {
     `*ID Tag NFC:* ${order.tagId}`,
     `*Perfil Biker:* ${order.riderName}`,
     `*Paquete:* ${order.pkgName} (${order.stickerCount} ${order.stickerCount === 1 ? 'sticker' : 'stickers'})`,
-    `*Colores elegidos:* ${colorsBreakdown}`,
+    `*Modelos y colores elegidos:* ${itemsBreakdown}`,
     `*Total del paquete:* $${order.totalPrice} MXN`,
     ``,
     ...deliveryLines,
@@ -235,9 +590,10 @@ const DEFAULT_STICKER_PACKAGES = [
     name: 'Kit Individual Casco NFC',
     subtitle: 'Para 1 casco principal',
     price: 249,
-    specs: '1 Sticker NFC de emergencia · Color elegible',
+    specs: '1 Sticker NFC de emergencia · Modelo (Racer, Choper, Cross) y color elegible',
     stickerCount: 1,
     availableColors: [...ALL_STICKER_COLORS],
+    availableModels: [...ALL_STICKER_MODELS],
     sortOrder: 1,
   },
   {
@@ -245,9 +601,10 @@ const DEFAULT_STICKER_PACKAGES = [
     name: 'Kit Biker Safe Pro',
     subtitle: 'Más elegido · 2 Stickers NFC',
     price: 399,
-    specs: '2 Stickers NFC para Casco / Moto · Color elegible por unidad',
+    specs: '2 Stickers NFC para Casco / Moto · Modelo y color elegible por unidad',
     stickerCount: 2,
     availableColors: [...ALL_STICKER_COLORS],
+    availableModels: [...ALL_STICKER_MODELS],
     sortOrder: 2,
   },
   {
@@ -255,9 +612,10 @@ const DEFAULT_STICKER_PACKAGES = [
     name: 'Kit Dúo / Rodada',
     subtitle: 'Cobertura en múltiples cascos',
     price: 649,
-    specs: '4 Stickers NFC programados con tu perfil médico',
+    specs: '4 Stickers NFC programados con tu perfil médico · Modelo y color por unidad',
     stickerCount: 4,
     availableColors: [...ALL_STICKER_COLORS],
+    availableModels: [...ALL_STICKER_MODELS],
     sortOrder: 3,
   },
 ];
@@ -270,6 +628,10 @@ function normalizePackageOption(raw, fallbackIndex = 0) {
 
   const validColors = Array.isArray(raw?.availableColors)
     ? raw.availableColors.filter((c) => ALL_STICKER_COLORS.includes(c))
+    : [];
+
+  const validModels = Array.isArray(raw?.availableModels)
+    ? raw.availableModels.filter((m) => ALL_STICKER_MODELS.includes(m))
     : [];
 
   let cleanedSpecs = raw?.specs || fallback.specs;
@@ -292,6 +654,7 @@ function normalizePackageOption(raw, fallbackIndex = 0) {
         ? Math.round(raw.stickerCount)
         : fallback.stickerCount,
     availableColors: validColors.length > 0 ? validColors : [...ALL_STICKER_COLORS],
+    availableModels: validModels.length > 0 ? validModels : [...ALL_STICKER_MODELS],
     sortOrder: typeof raw?.sortOrder === 'number' ? raw.sortOrder : fallback.sortOrder,
   };
 }
@@ -552,14 +915,19 @@ const state = {
   packages: DEFAULT_STICKER_PACKAGES.map((p) => ({
     ...p,
     availableColors: [...p.availableColors],
+    availableModels: [...(p.availableModels || ALL_STICKER_MODELS)],
   })),
   packagesLoadedFromDb: false,
+
+  // Dynamic Sticker Models Catalog (Racer, Choper, Cross + Reference Images)
+  stickerModels: DEFAULT_STICKER_MODELS.map((m) => ({ ...m })),
 
   // Dynamic SPEI + WhatsApp Payment Settings (Editable by Admin)
   paymentSettings: { ...DEFAULT_PAYMENT_SETTINGS },
 
   // Checkout state
   selectedPkgId: 'pro',
+  selectedStickerModels: ['Racer', 'Choper', 'Cross', 'Racer', 'Choper', 'Cross', 'Racer', 'Choper', 'Cross', 'Racer'],
   selectedStickerColors: ['Rojo', 'Negro', 'Gris', 'Verde', 'Azul', 'Rosa', 'Morado', 'Amarillo', 'Rojo', 'Negro'],
   deliveryMethod: 'personal_cdmx_edomex', // 'personal_cdmx_edomex' | 'paqueteria_nacional'
   recipientName: '',
@@ -602,16 +970,108 @@ const state = {
   adminSavingPackages: false,
   adminPackagesSavedSuccess: false,
   adminPackagesError: null,
+  adminSelectedModelSlot: {
+    racer: 'general',
+    choper: 'general',
+    cross: 'general',
+  },
+  adminUploadingModelId: null,
+  adminSavingModels: false,
+  adminModelsSavedSuccess: false,
+  adminModelsError: null,
   adminSavingPayment: false,
   adminPaymentSavedSuccess: false,
   adminPaymentError: null,
+  adminUploadingLogo: false,
+  adminLogoSavedSuccess: false,
+  adminLogoError: null,
+
+  // Floating Q&A Page / Doubt Widget State
+  qaModalOpen: false,
+  qaCategoryFilter: 'all', // 'all' | 'nfc' | 'perfil' | 'compra'
+  qaExpandedIds: ['qa-1', 'qa-2', 'qa-4', 'qa-5'],
 };
+
+const QA_CATEGORIES = [
+  { id: 'all', label: 'Todas las dudas' },
+  { id: 'nfc', label: 'Funcionamiento NFC' },
+  { id: 'perfil', label: 'Perfil y Privacidad' },
+  { id: 'compra', label: 'Modelos, Pago y Entrega' },
+];
+
+const QA_ITEMS = [
+  {
+    id: 'qa-1',
+    category: 'nfc',
+    categoryLabel: 'Funcionamiento NFC',
+    question: '¿Cómo funciona el Sticker NFC durante una emergencia?',
+    answer:
+      'Al acercar cualquier teléfono inteligente (Android o iPhone) a pocos centímetros del sticker colocado en tu casco o motocicleta, se abre automáticamente en el navegador tu página de emergencia Biker Safe con tu tipo de sangre, alergias, condiciones médicas, póliza de seguro y botones de llamada directa a tus familiares con su parentesco. No requiere instalar ninguna aplicación.',
+  },
+  {
+    id: 'qa-2',
+    category: 'nfc',
+    categoryLabel: 'Funcionamiento NFC',
+    question: '¿El sticker necesita batería, recargas o pago de mensualidades?',
+    answer:
+      'No. La tecnología NFC funciona de forma pasiva por proximidad cuando un celular se acerca al sticker, por lo que nunca requiere batería ni recargas. Además, el acceso y edición de tu perfil médico en Biker Safe no tiene costos mensuales ni anualidades.',
+  },
+  {
+    id: 'qa-3',
+    category: 'perfil',
+    categoryLabel: 'Perfil y Privacidad',
+    question: '¿Puedo modificar mis datos médicos o contactos de emergencia después de comprar?',
+    answer:
+      'Sí, todas las veces que lo necesites. Solo inicia sesión con tu cuenta de Google en Biker Safe, actualiza tus teléfonos de emergencia, parentesco, alergias, seguro o datos de tu motocicleta y guarda los cambios. Tu información se actualiza al instante sin tener que cambiar tu sticker físico.',
+  },
+  {
+    id: 'qa-4',
+    category: 'compra',
+    categoryLabel: 'Modelos, Pago y Entrega',
+    question: '¿Qué modelos y colores puedo elegir para mis stickers?',
+    answer:
+      'Contamos con 3 modelos diseñados para cada estilo de motociclista: Racer (deportivo/pista), Choper (clásico custom/cruiser) y Cross (enduro/off-road). En cualquiera de nuestros 3 paquetes puedes elegir individualmente el modelo y el color (Rojo, Negro, Gris, Verde, Azul, Rosa, Morado o Amarillo) por cada sticker incluido en tu kit.',
+  },
+  {
+    id: 'qa-5',
+    category: 'compra',
+    categoryLabel: 'Modelos, Pago y Entrega',
+    question: '¿Cómo se realiza el pago y cómo funciona la entrega?',
+    answer:
+      'Una vez que guardas tu perfil médico (Paso 1) y personalizas tu paquete (Paso 2), realizas tu pago vía Transferencia SPEI indicando tu Folio de Pedido. Para la entrega puedes elegir entre dos opciones que se acuerdan directamente vía WhatsApp: 1) Entrega Personal (únicamente en Estado de México y CDMX) o 2) Envío por Paquetería a toda la República Mexicana.',
+  },
+  {
+    id: 'qa-6',
+    category: 'nfc',
+    categoryLabel: 'Funcionamiento NFC',
+    question: '¿En qué parte del casco o motocicleta se recomienda pegar el sticker?',
+    answer:
+      'En una superficie limpia, lisa y no metálica, preferentemente en el costado lateral o parte trasera inferior de tu casco, o sobre plásticos del carenado/parabrisas de tu motocicleta. Evita pegarlo directamente sobre metal desnudo para asegurar una lectura NFC inmediata.',
+  },
+  {
+    id: 'qa-7',
+    category: 'nfc',
+    categoryLabel: 'Funcionamiento NFC',
+    question: '¿Resiste la lluvia, el sol y el lavado habitual del casco?',
+    answer:
+      'Sí. Nuestros stickers están diseñados para uso en ruta y exteriores, soportando lluvia, exposición solar, polvo y la limpieza habitual de tu casco o motocicleta sin perder capacidad de lectura.',
+  },
+  {
+    id: 'qa-8',
+    category: 'perfil',
+    categoryLabel: 'Perfil y Privacidad',
+    question: '¿Quién puede ver o editar mi información médica?',
+    answer:
+      'Tu perfil público contiene exclusivamente datos de auxilio médico e identificación para emergencias. Cualquier paramédico o persona que te auxilie puede leer la ficha al acercar su celular al sticker, pero únicamente tú (iniciando sesión con tu cuenta verificada) puedes modificar tus datos.',
+  },
+];
 
 let unsubscribeUserStickers = null;
 let unsubscribeUserOrders = null;
 let unsubscribeAllStickersAdmin = null;
 let unsubscribeAllOrdersAdmin = null;
 let unsubscribePackages = null;
+let unsubscribeStickerModels = null;
 let unsubscribePaymentSettings = null;
 
 async function syncUserPrivateProfile(user) {
@@ -682,6 +1142,24 @@ function getSelectedColorsForPackage(pkg) {
   return result;
 }
 
+function getSelectedModelsForPackage(pkg) {
+  const count = Math.max(1, Math.min(10, Number(pkg?.stickerCount) || 1));
+  const avail =
+    Array.isArray(pkg?.availableModels) && pkg.availableModels.length > 0
+      ? pkg.availableModels
+      : ALL_STICKER_MODELS;
+  const result = [];
+  for (let i = 0; i < count; i++) {
+    const chosen = state.selectedStickerModels[i];
+    if (chosen && avail.includes(chosen)) {
+      result.push(chosen);
+    } else {
+      result.push(avail[i % avail.length]);
+    }
+  }
+  return result;
+}
+
 async function handleSignOut() {
   state.adminAuthenticated = false;
   if (unsubscribeAllStickersAdmin) {
@@ -725,6 +1203,33 @@ function subscribeToPackages() {
   );
 }
 
+// Subscribe to the 3 sticker models (Racer, Choper, Cross) & reference images in Firestore
+function subscribeToStickerModels() {
+  if (unsubscribeStickerModels) return;
+  const modelsQuery = query(collection(db, 'sticker_models'), where('sortOrder', '>=', 1));
+  unsubscribeStickerModels = onSnapshot(
+    modelsQuery,
+    (snapshot) => {
+      if (!snapshot.empty) {
+        const byId = {};
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          if (data && data.modelId) {
+            byId[data.modelId] = data;
+          }
+        });
+        state.stickerModels = DEFAULT_STICKER_MODELS.map((def, idx) =>
+          normalizeStickerModelCatalog(byId[def.modelId] || def, idx)
+        );
+        renderApp();
+      }
+    },
+    () => {
+      // Fallback to default sticker models
+    }
+  );
+}
+
 function subscribeToPaymentSettings() {
   if (unsubscribePaymentSettings) return;
   unsubscribePaymentSettings = onSnapshot(
@@ -732,6 +1237,11 @@ function subscribeToPaymentSettings() {
     (snap) => {
       if (snap.exists()) {
         const data = snap.data();
+        const remoteLogo = typeof data.brandLogoUrl === 'string' ? data.brandLogoUrl : '';
+        const localLogo = getStoredLocalLogo();
+        if (remoteLogo) {
+          setStoredLocalLogo(remoteLogo);
+        }
         state.paymentSettings = {
           settingId: 'spei',
           bankName: data.bankName || DEFAULT_PAYMENT_SETTINGS.bankName,
@@ -743,12 +1253,23 @@ function subscribeToPaymentSettings() {
             data.paymentInstructions !== undefined
               ? data.paymentInstructions
               : DEFAULT_PAYMENT_SETTINGS.paymentInstructions,
+          brandLogoUrl: remoteLogo || localLogo || '',
         };
         renderApp();
+      } else {
+        const localLogo = getStoredLocalLogo();
+        if (localLogo) {
+          state.paymentSettings.brandLogoUrl = localLogo;
+          renderApp();
+        }
       }
     },
     () => {
-      // Fallback to default payment settings
+      const localLogo = getStoredLocalLogo();
+      if (localLogo) {
+        state.paymentSettings.brandLogoUrl = localLogo;
+        renderApp();
+      }
     }
   );
 }
@@ -939,22 +1460,53 @@ function subscribeToUserSticker(user) {
   );
 }
 
-// ============================================================================
+/// ============================================================================
 // 4. HTML Templates
 // ============================================================================
+function getActiveOfficialBrandLogoUrl() {
+  return String(state.paymentSettings?.brandLogoUrl || getStoredLocalLogo() || '').trim();
+}
+
 function renderHeader() {
+  const officialLogoUrl = getActiveOfficialBrandLogoUrl();
   return `
     <header class="bg-[#08090B] text-white border-b border-zinc-800/90">
       <div class="max-w-6xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-4">
-        <!-- Zone 1: Brand Wordmark -->
-        <a href="#inicio" id="nav-brand-link" class="inline-flex items-center gap-2.5 text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0">
-          <svg viewBox="0 0 28 20" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-7 h-5 text-orange-500 shrink-0" aria-hidden="true">
-            <circle cx="5.5" cy="14.5" r="3.5" stroke="currentColor" stroke-width="2.2" />
-            <circle cx="22.5" cy="14.5" r="3.5" stroke="currentColor" stroke-width="2.2" />
-            <path d="M5.5 14.5L10 8H16.5L19.5 14.5M10 8L13 14.5H19.5M15 4.5H18.5L22.5 14.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>Biker Safe</span>
-        </a>
+        <!-- Zone 1: Brand Wordmark / Exact Registered Logo ONLY here -->
+        <div class="flex items-center gap-2.5 shrink-0">
+          <a href="#inicio" id="nav-brand-link" class="inline-flex items-center whitespace-nowrap shrink-0" aria-label="Biker Safe">
+            ${
+              officialLogoUrl
+                ? `
+              <img
+                src="${escapeHtml(officialLogoUrl)}"
+                alt="Biker Safe"
+                class="h-10 sm:h-12 w-auto max-w-[220px] sm:max-w-[260px] object-contain select-none"
+              />
+            `
+                : `
+              <span class="font-bold tracking-tight text-lg text-white">BIKER <span class="text-orange-500">SAFE</span></span>
+            `
+            }
+          </a>
+          ${
+            !officialLogoUrl
+              ? `
+            <label
+              title="Sube tu archivo Logo.webp original sin ninguna alteración"
+              class="inline-flex items-center gap-1.5 px-2.5 py-1 bg-orange-500 hover:bg-orange-400 text-black text-[11px] font-bold rounded-lg transition-colors cursor-pointer shrink-0"
+            >
+              <span>${state.adminUploadingLogo ? 'Cargando...' : 'Cargar Logo.webp Original'}</span>
+              <input
+                type="file"
+                accept="image/webp,image/png,image/jpeg,image/svg+xml,image/*"
+                class="direct-brand-logo-file-input hidden"
+              />
+            </label>
+          `
+              : ''
+          }
+        </div>
 
         <!-- Zone 2: Only Main Screen in Menu -->
         <nav class="flex items-center gap-6 text-sm font-medium">
@@ -1199,10 +1751,15 @@ function renderStickerCheckoutStep() {
   const selectedPkg =
     state.packages.find((p) => p.pkgId === state.selectedPkgId) || state.packages[1] || state.packages[0];
   const chosenColors = getSelectedColorsForPackage(selectedPkg);
+  const chosenModels = getSelectedModelsForPackage(selectedPkg);
   const availColors =
     Array.isArray(selectedPkg.availableColors) && selectedPkg.availableColors.length > 0
       ? selectedPkg.availableColors
       : ALL_STICKER_COLORS;
+  const availModels =
+    Array.isArray(selectedPkg.availableModels) && selectedPkg.availableModels.length > 0
+      ? selectedPkg.availableModels
+      : ALL_STICKER_MODELS;
 
   return `
     <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-8">
@@ -1218,7 +1775,7 @@ function renderStickerCheckoutStep() {
             Adquiere tu Sticker NFC Biker Safe
           </h2>
           <p class="text-sm text-zinc-400 mt-1">
-            Nosotros programamos y vinculamos tu sticker físico con tu perfil médico antes de enviarlo a tu domicilio.
+            Nosotros programamos y vinculamos tu sticker físico con tu perfil médico antes de enviarlo.
           </p>
         </div>
 
@@ -1242,15 +1799,7 @@ function renderStickerCheckoutStep() {
             </div>
 
             <div class="flex items-center gap-4">
-              <div class="w-16 h-16 rounded-xl bg-zinc-900 border border-orange-500/40 flex flex-col items-center justify-center shrink-0 text-orange-500">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-7 h-7" aria-hidden="true">
-                  <path d="M5 12.55a11 11 0 0 1 14.08 0" stroke-linecap="round" stroke-linejoin="round"/>
-                  <path d="M1.42 9a16 16 0 0 1 21.16 0" stroke-linecap="round" stroke-linejoin="round"/>
-                  <path d="M8.53 16.11a6 6 0 0 1 6.95 0" stroke-linecap="round" stroke-linejoin="round"/>
-                  <circle cx="12" cy="20" r="1" fill="currentColor"/>
-                </svg>
-                <span class="text-[10px] font-bold tracking-wider text-zinc-300 mt-0.5">NFC</span>
-              </div>
+              ${renderStickerModelPreviewHtml(chosenModels[0] || 'Racer', chosenColors[0] || 'Rojo', 'w-16 h-16')}
               <div class="space-y-1 min-w-0">
                 <div class="text-[11px] font-bold text-orange-500">STICKER DE EMERGENCIA</div>
                 <div class="text-base font-bold text-white truncate">${escapeHtml(sticker.fullName)}</div>
@@ -1268,21 +1817,35 @@ function renderStickerCheckoutStep() {
               </div>
             </div>
 
-            <!-- Selected Colors Summary in Preview -->
-            <div class="pt-3 border-t border-zinc-800/80 space-y-2">
+            <!-- Selected Models & Colors Summary in Preview -->
+            <div class="pt-3 border-t border-zinc-800/80 space-y-2.5">
               <div class="text-[11px] font-semibold text-zinc-300">
-                ${chosenColors.length === 1 ? 'Color de Sticker seleccionado:' : `Colores seleccionados (${chosenColors.length} stickers):`}
+                ${
+                  chosenColors.length === 1
+                    ? 'Modelo y color seleccionado:'
+                    : `Modelos y colores seleccionados (${chosenColors.length} stickers):`
+                }
               </div>
-              <div class="flex flex-wrap gap-1.5">
+              <div class="grid grid-cols-1 gap-2">
                 ${chosenColors
-                  .map(
-                    (colorName, idx) => `
-                  <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-200">
-                    <span class="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0" style="background-color: ${STICKER_COLOR_SWATCHES[colorName] || '#f97316'}"></span>
-                    <span>#${idx + 1}: ${escapeHtml(colorName)}</span>
-                  </span>
-                `
-                  )
+                  .map((colorName, idx) => {
+                    const modelName = chosenModels[idx] || 'Racer';
+                    const hex = STICKER_COLOR_SWATCHES[colorName] || '#f97316';
+                    return `
+                  <div class="flex items-center gap-3 p-2 rounded-xl bg-zinc-900/90 border border-zinc-800">
+                    ${renderStickerModelPreviewHtml(modelName, colorName, 'w-11 h-11')}
+                    <div class="min-w-0 flex-1">
+                      <div class="text-xs font-bold text-white">
+                        Sticker #${idx + 1} · Modelo ${escapeHtml(modelName)}
+                      </div>
+                      <div class="flex items-center gap-1.5 text-[11px] text-zinc-300 mt-0.5">
+                        <span class="w-2.5 h-2.5 rounded-full border border-white/25 shrink-0" style="background-color: ${hex}"></span>
+                        <span>Variación de color: <strong class="text-orange-400">${escapeHtml(colorName)}</strong></span>
+                      </div>
+                    </div>
+                  </div>
+                `;
+                  })
                   .join('')}
               </div>
             </div>
@@ -1389,7 +1952,7 @@ function renderStickerCheckoutStep() {
               <!-- Order Summary Box -->
               <div class="p-4 bg-[#14161A] border border-zinc-800 rounded-xl space-y-1.5 text-xs text-zinc-300">
                 <div><strong class="text-white">Paquete:</strong> ${escapeHtml(ord.pkgName)} (${ord.stickerCount} ${ord.stickerCount === 1 ? 'sticker' : 'stickers'} · $${ord.totalPrice} MXN)</div>
-                <div><strong class="text-white">Colores por Sticker:</strong> ${(ord.selectedColors || []).map((c, i) => `Sticker #${i + 1}: ${escapeHtml(c)}`).join(' · ')}</div>
+                <div><strong class="text-white">Modelos y Colores por Sticker:</strong> ${formatOrderStickersSummary(ord)}</div>
                 <div>
                   <strong class="text-white">Modalidad de Entrega:</strong>
                   <span class="text-orange-400 font-semibold">
@@ -1478,56 +2041,116 @@ function renderStickerCheckoutStep() {
                 </div>
               </div>
 
-              <!-- Per-Sticker Color Selector based on selectedPkg.stickerCount -->
+              <!-- Per-Sticker Model (Racer, Choper, Cross) & Color Selector based on selectedPkg.stickerCount -->
               <div class="space-y-3 pt-2 border-t border-zinc-800">
                 <div>
                   <label class="block text-xs font-bold text-zinc-300">
-                    2. Elige el Color de ${chosenColors.length === 1 ? 'tu Sticker NFC' : `cada uno de tus ${chosenColors.length} Stickers NFC`}
+                    2. Elige el Modelo (${availModels.join(', ')}) y Color de ${
+                      chosenColors.length === 1
+                        ? 'tu Sticker NFC'
+                        : `cada uno de tus ${chosenColors.length} Stickers NFC`
+                    }
                   </label>
                   <p class="text-[11px] text-zinc-400 mt-0.5">
                     ${
                       chosenColors.length === 1
-                        ? 'Este paquete incluye 1 sticker. Selecciona el color de tu preferencia:'
-                        : `Este paquete incluye ${chosenColors.length} stickers. Elige el color para cada uno:`
+                        ? 'Selecciona entre los 3 modelos disponibles (Racer, Choper, Cross) y su variación de color:'
+                        : `Este paquete incluye ${chosenColors.length} stickers. Elige el modelo y color para cada uno:`
                     }
                   </p>
                 </div>
 
-                <div class="space-y-3">
+                <div class="space-y-3.5">
                   ${chosenColors
-                    .map(
-                      (selectedColor, unitIdx) => `
-                    <div class="p-3.5 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-2.5">
-                      <div class="flex items-center justify-between text-xs">
-                        <span class="font-bold text-white">Sticker #${unitIdx + 1}</span>
-                        <span class="text-orange-400 font-semibold">Color: ${escapeHtml(selectedColor)}</span>
+                    .map((selectedColor, unitIdx) => {
+                      const selectedModel = chosenModels[unitIdx] || availModels[0] || 'Racer';
+                      const modelRecord = getStickerModelRecordByName(selectedModel);
+                      return `
+                    <div class="p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-3.5">
+                      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
+                        <div class="flex items-center gap-3">
+                          ${renderStickerModelPreviewHtml(selectedModel, selectedColor, 'w-16 h-16')}
+                          <div>
+                            <div class="flex items-center gap-2">
+                              <span class="text-xs font-bold text-white">Sticker #${unitIdx + 1}</span>
+                              <span class="px-2 py-0.5 rounded bg-orange-500/15 border border-orange-500/40 text-[11px] font-bold text-orange-400">
+                                Modelo ${escapeHtml(selectedModel)}
+                              </span>
+                            </div>
+                            <p class="text-[11px] text-zinc-400 mt-0.5">
+                              ${escapeHtml(modelRecord.description || '')}
+                            </p>
+                            <div class="text-[11px] text-zinc-300 mt-1">
+                              Variación seleccionada: <strong class="text-orange-400">${escapeHtml(selectedModel)} · Color ${escapeHtml(selectedColor)}</strong>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div class="flex flex-wrap gap-2">
-                        ${availColors
-                          .map((colorOption) => {
-                            const isSelected = selectedColor === colorOption;
-                            const hex = STICKER_COLOR_SWATCHES[colorOption] || '#f97316';
-                            return `
-                            <button
-                              type="button"
-                              data-sticker-unit="${unitIdx}"
-                              data-sticker-color="${escapeHtml(colorOption)}"
-                              class="sticker-color-choice-btn inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
-                                isSelected
-                                  ? 'bg-zinc-800 border-orange-500 text-white'
-                                  : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
-                              }"
-                            >
-                              <span class="w-3 h-3 rounded-full border border-white/25 shrink-0" style="background-color: ${hex}"></span>
-                              <span>${escapeHtml(colorOption)}</span>
-                            </button>
-                          `;
-                          })
-                          .join('')}
+
+                      <!-- Model Selector (Racer, Choper, Cross) -->
+                      <div class="space-y-1.5">
+                        <span class="block text-[11px] font-semibold text-zinc-300">
+                          Modelo del Sticker #${unitIdx + 1}:
+                        </span>
+                        <div class="grid grid-cols-3 gap-2">
+                          ${availModels
+                            .map((modelOption) => {
+                              const isModelSelected = selectedModel === modelOption;
+                              return `
+                              <button
+                                type="button"
+                                data-sticker-unit="${unitIdx}"
+                                data-sticker-model="${escapeHtml(modelOption)}"
+                                class="sticker-model-choice-btn p-2.5 rounded-xl border text-left transition-colors cursor-pointer flex items-center gap-2.5 ${
+                                  isModelSelected
+                                    ? 'bg-zinc-800/90 border-orange-500 text-white'
+                                    : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+                                }"
+                              >
+                                ${renderStickerModelPreviewHtml(modelOption, selectedColor, 'w-9 h-9')}
+                                <div class="min-w-0">
+                                  <span class="block text-xs font-bold truncate">${escapeHtml(modelOption)}</span>
+                                  <span class="block text-[10px] text-zinc-400 truncate">${escapeHtml(selectedColor)}</span>
+                                </div>
+                              </button>
+                            `;
+                            })
+                            .join('')}
+                        </div>
+                      </div>
+
+                      <!-- Color Selector -->
+                      <div class="space-y-1.5">
+                        <span class="block text-[11px] font-semibold text-zinc-300">
+                          Variación de Color del Sticker #${unitIdx + 1}:
+                        </span>
+                        <div class="flex flex-wrap gap-2">
+                          ${availColors
+                            .map((colorOption) => {
+                              const isSelected = selectedColor === colorOption;
+                              const hex = STICKER_COLOR_SWATCHES[colorOption] || '#f97316';
+                              return `
+                              <button
+                                type="button"
+                                data-sticker-unit="${unitIdx}"
+                                data-sticker-color="${escapeHtml(colorOption)}"
+                                class="sticker-color-choice-btn inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-zinc-800 border-orange-500 text-white'
+                                    : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+                                }"
+                              >
+                                <span class="w-3 h-3 rounded-full border border-white/25 shrink-0" style="background-color: ${hex}"></span>
+                                <span>${escapeHtml(colorOption)}</span>
+                              </button>
+                            `;
+                            })
+                            .join('')}
+                        </div>
                       </div>
                     </div>
-                  `
-                    )
+                  `;
+                    })
                     .join('')}
                 </div>
               </div>
@@ -1694,7 +2317,7 @@ function renderStickerCheckoutStep() {
                           <span class="text-zinc-400">· Estatus: <strong class="text-orange-300">${escapeHtml(stLabel)}</strong></span>
                         </div>
                         <div class="text-[11px] text-zinc-400">
-                          Colores: ${(ord.selectedColors || []).map((c, i) => `#${i + 1}: ${escapeHtml(c)}`).join(', ')} · ${
+                          Stickers: ${escapeHtml(formatOrderStickersSummary(ord))} · ${
                             isPersonalDeliveryOrder(ord)
                               ? 'Entrega Personal (CDMX / EdoMéx · WhatsApp)'
                               : 'Envío por Paquetería (WhatsApp)'
@@ -2237,22 +2860,32 @@ function renderAdminPanelView() {
                       </div>
                     </div>
 
-                    <!-- Selected Colors and Shipping Details -->
+                    <!-- Selected Models, Colors and Shipping Details -->
                     <div class="grid grid-cols-1 md:grid-cols-12 gap-4 text-xs text-zinc-300">
                       <div class="md:col-span-5 space-y-2">
                         <span class="text-zinc-500 block">
-                          Colores Solicitados (${ord.stickerCount} ${ord.stickerCount === 1 ? 'sticker' : 'stickers'}):
+                          Modelos y Colores Solicitados (${ord.stickerCount} ${ord.stickerCount === 1 ? 'sticker' : 'stickers'}):
                         </span>
-                        <div class="flex flex-wrap gap-1.5">
+                        <div class="flex flex-wrap gap-2">
                           ${(ord.selectedColors || [])
-                            .map(
-                              (colorName, i) => `
-                            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#14161A] border border-zinc-800 text-[11px] text-white font-semibold">
-                              <span class="w-2.5 h-2.5 rounded-full border border-white/25 shrink-0" style="background-color: ${STICKER_COLOR_SWATCHES[colorName] || '#f97316'}"></span>
-                              <span>Sticker #${i + 1}: ${escapeHtml(colorName)}</span>
-                            </span>
-                          `
-                            )
+                            .map((colorName, i) => {
+                              const modelName =
+                                Array.isArray(ord.selectedModels) && ord.selectedModels[i]
+                                  ? ord.selectedModels[i]
+                                  : 'Racer';
+                              return `
+                            <div class="inline-flex items-center gap-2 p-1.5 pr-2.5 rounded-lg bg-[#14161A] border border-zinc-800 text-[11px] text-white font-semibold">
+                              ${renderStickerModelPreviewHtml(modelName, colorName, 'w-8 h-8')}
+                              <div>
+                                <div class="text-orange-400 font-bold">#${i + 1} · ${escapeHtml(modelName)}</div>
+                                <div class="flex items-center gap-1 text-zinc-300">
+                                  <span class="w-2 h-2 rounded-full border border-white/25 shrink-0" style="background-color: ${STICKER_COLOR_SWATCHES[colorName] || '#f97316'}"></span>
+                                  <span>${escapeHtml(colorName)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          `;
+                            })
                             .join('')}
                         </div>
                       </div>
@@ -2433,6 +3066,31 @@ function renderAdminPanelView() {
 
                   <div>
                     <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
+                      Modelos disponibles para elegir (${(pkg.availableModels || ALL_STICKER_MODELS).length})
+                    </label>
+                    <div class="flex flex-wrap gap-1.5">
+                      ${ALL_STICKER_MODELS.map((modelName) => {
+                        const enabled = (pkg.availableModels || ALL_STICKER_MODELS).includes(modelName);
+                        return `
+                          <button
+                            type="button"
+                            data-pkg-idx="${idx}"
+                            data-toggle-model="${escapeHtml(modelName)}"
+                            class="admin-pkg-model-toggle inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                              enabled
+                                ? 'bg-zinc-800 border-orange-500 text-white'
+                                : 'bg-[#14161A] border-zinc-800/80 text-zinc-500 opacity-60 hover:opacity-100'
+                            }"
+                          >
+                            <span>Modelo ${escapeHtml(modelName)}</span>
+                          </button>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="block text-xs font-semibold text-zinc-300 mb-1.5">
                       Colores disponibles para elegir (${(pkg.availableColors || ALL_STICKER_COLORS).length})
                     </label>
                     <div class="flex flex-wrap gap-1.5">
@@ -2490,6 +3148,290 @@ function renderAdminPanelView() {
               </button>
             </div>
           </form>
+        </div>
+
+        <!-- Section B.2: 3 Sticker Models (Racer, Choper, Cross) & Reference Images per Color Variation -->
+        <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-6">
+          <div class="border-b border-zinc-800 pb-4">
+            <h2 class="text-xl font-bold text-white">
+              Modelos de Sticker (Racer, Choper, Cross) e Imágenes de Referencia por Variación de Color
+            </h2>
+            <p class="text-xs text-zinc-400 mt-1">
+              Sube la imagen de referencia para cada uno de los 3 modelos (Racer, Choper, Cross). Puedes subir una imagen general del modelo o subir la imagen específica para cada variación de color (Rojo, Negro, Gris, Verde, Azul, Rosa, Morado, Amarillo).
+            </p>
+          </div>
+
+          ${
+            state.adminModelsSavedSuccess
+              ? `
+            <div class="p-4 bg-zinc-900 border border-orange-500 rounded-xl text-xs text-orange-400 font-semibold">
+              ¡Las imágenes de referencia y modelos (Racer, Choper, Cross) se han guardado correctamente!
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            state.adminModelsError
+              ? `
+            <div class="p-4 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+              ${escapeHtml(state.adminModelsError)}
+            </div>
+          `
+              : ''
+          }
+
+          <form id="admin-models-form" class="space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              ${state.stickerModels
+                .map((modelRec, mIdx) => {
+                  const activeSlot = state.adminSelectedModelSlot[modelRec.modelId] || 'general';
+                  const isGeneralSlot = activeSlot === 'general';
+                  const slotColorField = isGeneralSlot ? 'referenceImageUrl' : getStickerModelColorField(activeSlot);
+                  const currentSlotImage = modelRec[slotColorField] || '';
+                  const previewColor = isGeneralSlot ? 'Rojo' : activeSlot;
+                  const isUploadingThis = state.adminUploadingModelId === modelRec.modelId;
+
+                  const uploadedColorsCount = ALL_STICKER_COLORS.filter(
+                    (c) => Boolean(modelRec[getStickerModelColorField(c)])
+                  ).length;
+
+                  return `
+                  <div class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-4 flex flex-col justify-between">
+                    <div class="space-y-4">
+                      <div class="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+                        <div>
+                          <span class="text-xs font-bold text-orange-500">
+                            MODELO ${mIdx + 1} · ${escapeHtml(modelRec.name.toUpperCase())}
+                          </span>
+                          <span class="block text-[11px] text-zinc-400">
+                            ${modelRec.referenceImageUrl ? 'Imagen general activa' : 'Ilustración base'} · ${uploadedColorsCount}/8 colores con foto propia
+                          </span>
+                        </div>
+                        <span class="text-xs font-mono text-zinc-500">${escapeHtml(modelRec.modelId)}</span>
+                      </div>
+
+                      <!-- Description of the Model -->
+                      <div>
+                        <label class="block text-xs font-semibold text-zinc-300 mb-1">
+                          Descripción corta del Modelo ${escapeHtml(modelRec.name)}
+                        </label>
+                        <input
+                          type="text"
+                          id="model-desc-${mIdx}"
+                          maxlength="240"
+                          value="${escapeHtml(modelRec.description)}"
+                          placeholder="Descripción del diseño..."
+                          class="w-full px-3.5 py-2 text-xs bg-[#14161A] border border-zinc-800 rounded-lg text-white focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+
+                      <!-- Selector of which Variation to Upload / Preview (General or Specific Color) -->
+                      <div class="space-y-2">
+                        <label class="block text-xs font-semibold text-zinc-300">
+                          Selecciona variación para ver o subir imagen de referencia:
+                        </label>
+                        <div class="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            data-model-id="${escapeHtml(modelRec.modelId)}"
+                            data-model-slot="general"
+                            class="admin-model-slot-btn px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                              isGeneralSlot
+                                ? 'bg-orange-500 text-black border-orange-500 font-bold'
+                                : 'bg-[#14161A] border-zinc-800 text-zinc-300 hover:text-white'
+                            }"
+                          >
+                            Imagen General ${modelRec.referenceImageUrl ? '✓' : ''}
+                          </button>
+
+                          ${ALL_STICKER_COLORS.map((cName) => {
+                            const cField = getStickerModelColorField(cName);
+                            const hasColorImg = Boolean(modelRec[cField]);
+                            const isSlotActive = activeSlot === cName;
+                            const hex = STICKER_COLOR_SWATCHES[cName] || '#f97316';
+                            return `
+                              <button
+                                type="button"
+                                data-model-id="${escapeHtml(modelRec.modelId)}"
+                                data-model-slot="${escapeHtml(cName)}"
+                                class="admin-model-slot-btn inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                                  isSlotActive
+                                    ? 'bg-zinc-800 border-orange-500 text-white'
+                                    : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white'
+                                }"
+                              >
+                                <span class="w-2.5 h-2.5 rounded-full border border-white/25 shrink-0" style="background-color: ${hex}"></span>
+                                <span>${escapeHtml(cName)}${hasColorImg ? ' ✓' : ''}</span>
+                              </button>
+                            `;
+                          }).join('')}
+                        </div>
+                      </div>
+
+                      <!-- Live Reference Image Preview Box & Upload Button -->
+                      <div class="p-3.5 bg-[#14161A] border border-zinc-800 rounded-xl space-y-3">
+                        <div class="flex items-center gap-3.5">
+                          ${renderStickerModelPreviewHtml(modelRec.name, previewColor, 'w-20 h-20')}
+                          <div class="min-w-0 flex-1 space-y-1">
+                            <div class="text-xs font-bold text-white">
+                              ${
+                                isGeneralSlot
+                                  ? `Imagen General (${escapeHtml(modelRec.name)})`
+                                  : `${escapeHtml(modelRec.name)} · Color ${escapeHtml(activeSlot)}`
+                              }
+                            </div>
+                            <p class="text-[11px] text-zinc-400 leading-relaxed">
+                              ${
+                                currentSlotImage
+                                  ? 'Imagen de referencia personalizada cargada en esta variación.'
+                                  : isGeneralSlot
+                                  ? 'Sube una imagen general de referencia para este modelo.'
+                                  : modelRec.referenceImageUrl
+                                  ? 'Usando la imagen general del modelo. Sube una imagen si deseas una foto específica para este color.'
+                                  : 'Sube la imagen de referencia para este color desde tu dispositivo.'
+                              }
+                            </p>
+                          </div>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-2 pt-1">
+                          <label class="inline-flex items-center justify-center px-3.5 py-2 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer">
+                            <span>${
+                              isUploadingThis
+                                ? 'Subiendo y guardando...'
+                                : currentSlotImage
+                                ? 'Cambiar Imagen de Referencia'
+                                : 'Subir Imagen desde mi Dispositivo'
+                            }</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              data-upload-model-id="${escapeHtml(modelRec.modelId)}"
+                              data-upload-model-slot="${escapeHtml(activeSlot)}"
+                              class="admin-model-file-input hidden"
+                            />
+                          </label>
+
+                          ${
+                            currentSlotImage
+                              ? `
+                            <button
+                              type="button"
+                              data-clear-model-id="${escapeHtml(modelRec.modelId)}"
+                              data-clear-model-slot="${escapeHtml(activeSlot)}"
+                              class="admin-model-clear-slot-btn px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                            >
+                              Quitar Imagen
+                            </button>
+                          `
+                              : ''
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                `;
+                })
+                .join('')}
+            </div>
+
+            <div class="flex justify-end pt-2">
+              <button
+                type="submit"
+                ${state.adminSavingModels ? 'disabled' : ''}
+                class="px-7 py-3 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                ${
+                  state.adminSavingModels
+                    ? 'Guardando Catálogo de Modelos...'
+                    : 'Guardar Descripciones e Imágenes de los 3 Modelos'
+                }
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Section B.0: Official Registered Brand Logo (Displayed ONLY in Header Brand Name Position) -->
+        <div class="bg-[#14161A] border border-zinc-800 rounded-2xl p-6 sm:p-8 space-y-5">
+          <div class="border-b border-zinc-800 pb-4">
+            <h2 class="text-xl font-bold text-white">
+              Logotipo Oficial Registrado de la Marca (Barra Superior)
+            </h2>
+            <p class="text-xs text-zinc-400 mt-1">
+              Sube tu archivo original <strong class="text-white">Logo.webp</strong> exactamente como fue diseñado y registrado. El sistema conserva tu archivo íntegro sin editarlo ni redibujarlo y lo muestra únicamente en el lugar del nombre de la marca en la barra superior.
+            </p>
+          </div>
+
+          ${
+            state.adminLogoSavedSuccess
+              ? `
+            <div class="p-4 bg-zinc-900 border border-orange-500 rounded-xl text-xs text-orange-400 font-semibold">
+              ¡Tu archivo original de logotipo se ha guardado íntegro y está activo en la barra superior!
+            </div>
+          `
+              : ''
+          }
+
+          ${
+            state.adminLogoError
+              ? `
+            <div class="p-4 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+              ${escapeHtml(state.adminLogoError)}
+            </div>
+          `
+              : ''
+          }
+
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5">
+            <div class="flex items-center gap-4">
+              <div class="px-4 py-3 rounded-xl bg-[#08090B] border border-zinc-800 flex items-center justify-center min-w-[180px] min-h-[56px]">
+                ${
+                  getActiveOfficialBrandLogoUrl()
+                    ? `<img src="${escapeHtml(getActiveOfficialBrandLogoUrl())}" alt="Vista previa en barra superior" class="h-11 w-auto max-w-[240px] object-contain" />`
+                    : `<span class="text-xs text-zinc-500">Sin archivo Logo.webp cargado aún</span>`
+                }
+              </div>
+              <div class="space-y-1">
+                <div class="text-xs font-bold text-white">
+                  ${getActiveOfficialBrandLogoUrl() ? 'Archivo Original Activo (0% editado)' : 'Sube tu archivo Logo.webp'}
+                </div>
+                <p class="text-[11px] text-zinc-400">
+                  Se muestra exclusivamente en el encabezado principal donde va el nombre de la marca.
+                </p>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2.5 shrink-0">
+              <label class="inline-flex items-center justify-center px-4 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-xl transition-colors cursor-pointer">
+                <span>${
+                  state.adminUploadingLogo
+                    ? 'Guardando archivo original...'
+                    : getActiveOfficialBrandLogoUrl()
+                    ? 'Cambiar Archivo Logo.webp'
+                    : 'Subir Archivo Logo.webp Original'
+                }</span>
+                <input
+                  type="file"
+                  accept="image/webp,image/png,image/jpeg,image/svg+xml,image/*"
+                  class="direct-brand-logo-file-input hidden"
+                />
+              </label>
+              ${
+                getActiveOfficialBrandLogoUrl()
+                  ? `
+                <button
+                  type="button"
+                  id="admin-clear-brand-logo-btn"
+                  class="px-3.5 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+                >
+                  Quitar Logo
+                </button>
+              `
+                  : ''
+              }
+            </div>
+          </div>
         </div>
 
         <!-- Section C: SPEI Bank Transfer & WhatsApp Payment Configuration -->
@@ -2874,6 +3816,261 @@ function syncFormInputsBeforeReRender() {
       specs: specsEl ? specsEl.value : pkg.specs,
     };
   });
+
+  state.stickerModels = state.stickerModels.map((modelRec, mIdx) => {
+    const descEl = document.getElementById(`model-desc-${mIdx}`);
+    return {
+      ...modelRec,
+      description: descEl ? descEl.value : modelRec.description,
+    };
+  });
+}
+
+function renderFloatingQaWidget() {
+  const cleanWaPhone = String(
+    state.paymentSettings?.whatsappNumber || DEFAULT_PAYMENT_SETTINGS.whatsappNumber
+  ).replace(/[^0-9]/g, '');
+  const waHelpText = encodeURIComponent(
+    'Hola Biker Safe, visité su plataforma y tengo una duda sobre los Stickers NFC de emergencia:'
+  );
+  const waHelpUrl = cleanWaPhone
+    ? `https://wa.me/${cleanWaPhone}?text=${waHelpText}`
+    : `https://wa.me/?text=${waHelpText}`;
+
+  const filteredQa =
+    state.qaCategoryFilter === 'all'
+      ? QA_ITEMS
+      : QA_ITEMS.filter((item) => item.category === state.qaCategoryFilter);
+
+  return `
+    <!-- Floating Doubt / Q&A Button (Bottom-Right) -->
+    <div class="fixed bottom-5 right-5 z-40">
+      <button
+        type="button"
+        id="floating-qa-toggle-btn"
+        aria-label="Dudas y Preguntas Frecuentes (Q&A)"
+        title="Dudas y Preguntas Frecuentes (Q&A)"
+        aria-expanded="${state.qaModalOpen ? 'true' : 'false'}"
+        class="group w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center shadow-xl transition-transform duration-150 hover:scale-105 cursor-pointer ${
+          state.qaModalOpen
+            ? 'bg-zinc-900 text-orange-500 border-2 border-orange-500'
+            : 'bg-orange-500 hover:bg-orange-400 text-black border border-orange-400/40'
+        }"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-6 h-6 sm:w-7 sm:h-7" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </button>
+    </div>
+
+    ${
+      state.qaModalOpen
+        ? `
+      <!-- Floating Q&A Page Overlay -->
+      <div
+        id="qa-modal-backdrop"
+        class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="qa-modal-title"
+      >
+        <div
+          id="qa-modal-panel"
+          class="relative w-full max-w-4xl max-h-[88vh] overflow-y-auto bg-[#14161A] border border-zinc-800 rounded-2xl shadow-2xl flex flex-col"
+        >
+          <!-- Top Sticky Header of Q&A Page -->
+          <div class="sticky top-0 z-10 bg-[#08090B]/95 backdrop-blur border-b border-zinc-800 px-5 sm:px-8 py-4 flex items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-xl bg-orange-500/15 border border-orange-500/40 flex items-center justify-center text-orange-500 shrink-0">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+              </div>
+              <div>
+                <h2 id="qa-modal-title" class="text-base sm:text-lg font-bold text-white tracking-tight">
+                  Centro de Dudas y Preguntas Frecuentes (Q&amp;A)
+                </h2>
+                <p class="text-xs text-zinc-400">
+                  Conoce qué hacemos en Biker Safe y resuelve todas tus dudas
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              id="qa-modal-close-btn"
+              class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 transition-colors cursor-pointer shrink-0"
+            >
+              <span>Cerrar</span>
+              <span aria-hidden="true">✕</span>
+            </button>
+          </div>
+
+          <!-- Q&A Page Body -->
+          <div class="p-5 sm:p-8 space-y-8">
+            <!-- Initial Section: Brief Description of What We Do ("De inicio una breve descripción de lo que hacemos") -->
+            <section class="bg-gradient-to-br from-[#181B20] via-[#121418] to-[#0B0C0E] border border-orange-500/40 rounded-2xl p-5 sm:p-7 space-y-5">
+              <div class="space-y-2">
+                <div class="text-xs font-bold text-orange-500 tracking-wide">
+                  ¿QUÉ HACEMOS EN BIKER SAFE?
+                </div>
+                <h3 class="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                  Identificación Médica de Emergencia al Instante para Motociclistas
+                </h3>
+                <p class="text-sm text-zinc-300 leading-relaxed">
+                  En <strong class="text-white">Biker Safe</strong> desarrollamos un sistema de identificación médica y contacto de emergencia mediante <strong class="text-orange-400">Stickers NFC inteligentes</strong> diseñados para colocarse en tu casco o motocicleta.
+                </p>
+                <p class="text-sm text-zinc-400 leading-relaxed">
+                  Sabemos que en un accidente en ruta o ciudad cada segundo cuenta. Nuestro objetivo es que cualquier paramédico, rescatista o ciudadano pueda <strong class="text-zinc-200">acercar su teléfono celular a tu sticker NFC</strong> y consultar en menos de 2 segundos tu ficha médica vital (tipo de sangre, alergias, condiciones médicas, póliza de seguro y datos de tu moto) así como <strong class="text-zinc-200">llamar con un toque a tus familiares de emergencia</strong> sabiendo su parentesco, sin necesidad de instalar aplicaciones ni desbloquear tu teléfono.
+                </p>
+              </div>
+
+              <!-- 3 Pillars of How Biker Safe Works -->
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                <div class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                  <div class="text-xs font-bold text-orange-400">
+                    01. Registra tu Perfil Médico
+                  </div>
+                  <p class="text-xs text-zinc-400 leading-relaxed">
+                    Guarda tus datos vitales, alergias y contactos de emergencia con su parentesco. Puedes actualizar tu información cuando quieras.
+                  </p>
+                </div>
+
+                <div class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                  <div class="text-xs font-bold text-orange-400">
+                    02. Elige Modelo y Color
+                  </div>
+                  <p class="text-xs text-zinc-400 leading-relaxed">
+                    Selecciona tu paquete y personaliza cada sticker eligiendo entre los modelos <strong class="text-zinc-200">Racer, Choper o Cross</strong> y 8 colores disponibles.
+                  </p>
+                </div>
+
+                <div class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                  <div class="text-xs font-bold text-orange-400">
+                    03. Protección Activa 24/7
+                  </div>
+                  <p class="text-xs text-zinc-400 leading-relaxed">
+                    Recibe tus stickers programados (entrega personal en CDMX/EdoMéx o envío nacional acordado por WhatsApp). No usan batería ni mensualidades.
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <!-- Section 2: Interactive Q&A / Preguntas Frecuentes -->
+            <section class="space-y-5">
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 class="text-lg font-bold text-white">
+                    Preguntas Frecuentes (Q&amp;A)
+                  </h3>
+                  <p class="text-xs text-zinc-400">
+                    Haz clic en cualquier pregunta para ver u ocultar la respuesta detallada
+                  </p>
+                </div>
+
+                <!-- Interactive Filter Tabs -->
+                <div class="flex flex-wrap items-center gap-1.5 p-1 bg-[#0B0C0E] border border-zinc-800 rounded-xl">
+                  ${QA_CATEGORIES.map((cat) => {
+                    const isActive = state.qaCategoryFilter === cat.id;
+                    return `
+                      <button
+                        type="button"
+                        data-qa-filter="${cat.id}"
+                        class="qa-filter-btn px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                          isActive
+                            ? 'bg-orange-500 text-black font-bold'
+                            : 'text-zinc-400 hover:text-white'
+                        }"
+                      >
+                        ${escapeHtml(cat.label)}
+                      </button>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+
+              <!-- Q&A Accordion List -->
+              <div class="space-y-3">
+                ${filteredQa
+                  .map((item) => {
+                    const isExpanded = state.qaExpandedIds.includes(item.id);
+                    return `
+                      <div class="bg-[#0B0C0E] border ${
+                        isExpanded ? 'border-orange-500/50' : 'border-zinc-800'
+                      } rounded-xl overflow-hidden transition-colors">
+                        <button
+                          type="button"
+                          data-qa-toggle-id="${item.id}"
+                          aria-expanded="${isExpanded ? 'true' : 'false'}"
+                          class="qa-item-toggle-btn w-full px-5 py-4 text-left flex items-center justify-between gap-4 hover:bg-zinc-900/60 transition-colors cursor-pointer"
+                        >
+                          <div class="space-y-1">
+                            <div class="text-[11px] font-medium text-orange-400">
+                              ${escapeHtml(item.categoryLabel)}
+                            </div>
+                            <div class="text-sm sm:text-base font-bold text-white">
+                              ${escapeHtml(item.question)}
+                            </div>
+                          </div>
+                          <span class="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-orange-500 shrink-0 font-bold text-sm">
+                            ${isExpanded ? '−' : '+'}
+                          </span>
+                        </button>
+                        ${
+                          isExpanded
+                            ? `
+                          <div class="px-5 pb-4 pt-1 text-xs sm:text-sm text-zinc-300 leading-relaxed border-t border-zinc-800/70">
+                            ${escapeHtml(item.answer)}
+                          </div>
+                        `
+                            : ''
+                        }
+                      </div>
+                    `;
+                  })
+                  .join('')}
+              </div>
+            </section>
+
+            <!-- Bottom Call to Action inside Q&A Page -->
+            <section class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div class="space-y-1">
+                <div class="text-sm font-bold text-white">
+                  ¿Listo para proteger tu casco o tienes otra pregunta?
+                </div>
+                <p class="text-xs text-zinc-400">
+                  Configura tu perfil médico ahora mismo o escríbenos directamente por WhatsApp.
+                </p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2.5 shrink-0">
+                <a
+                  href="${waHelpUrl}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap"
+                >
+                  Preguntar por WhatsApp
+                </a>
+                <button
+                  type="button"
+                  id="qa-cta-start-btn"
+                  class="px-4 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-xl transition-colors whitespace-nowrap cursor-pointer"
+                >
+                  Ir a Configurar mi Sticker NFC
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    `
+        : ''
+    }
+  `;
 }
 
 export function renderApp() {
@@ -2949,12 +4146,18 @@ export function renderApp() {
               Pantalla Principal
             </button>
             <span aria-hidden="true" class="text-zinc-700">·</span>
+            <button type="button" id="footer-qa-btn" class="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer">
+              Dudas (Q&amp;A)
+            </button>
+            <span aria-hidden="true" class="text-zinc-700">·</span>
             <button type="button" id="footer-admin-btn" class="text-zinc-500 hover:text-orange-400 transition-colors cursor-pointer">
               Personal autorizado
             </button>
           </div>
         </div>
       </footer>
+
+      ${renderFloatingQaWidget()}
     </div>
   `;
 
@@ -2988,6 +4191,81 @@ function bindEvents() {
       syncFormInputsBeforeReRender();
       state.viewMode = 'main';
       state.mainStep = 'profile_form';
+      renderApp();
+    });
+  }
+
+  const footerQaBtn = document.getElementById('footer-qa-btn');
+  if (footerQaBtn) {
+    footerQaBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.qaModalOpen = true;
+      renderApp();
+    });
+  }
+
+  const floatingQaToggleBtn = document.getElementById('floating-qa-toggle-btn');
+  if (floatingQaToggleBtn) {
+    floatingQaToggleBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.qaModalOpen = !state.qaModalOpen;
+      renderApp();
+    });
+  }
+
+  const qaModalCloseBtn = document.getElementById('qa-modal-close-btn');
+  if (qaModalCloseBtn) {
+    qaModalCloseBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.qaModalOpen = false;
+      renderApp();
+    });
+  }
+
+  const qaModalBackdrop = document.getElementById('qa-modal-backdrop');
+  if (qaModalBackdrop) {
+    qaModalBackdrop.addEventListener('click', (e) => {
+      if (e.target === qaModalBackdrop) {
+        syncFormInputsBeforeReRender();
+        state.qaModalOpen = false;
+        renderApp();
+      }
+    });
+  }
+
+  const qaFilterBtns = document.querySelectorAll('.qa-filter-btn');
+  qaFilterBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      const cat = btn.getAttribute('data-qa-filter');
+      if (cat) {
+        state.qaCategoryFilter = cat;
+        renderApp();
+      }
+    });
+  });
+
+  const qaItemToggleBtns = document.querySelectorAll('.qa-item-toggle-btn');
+  qaItemToggleBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      const qaId = btn.getAttribute('data-qa-toggle-id');
+      if (!qaId) return;
+      if (state.qaExpandedIds.includes(qaId)) {
+        state.qaExpandedIds = state.qaExpandedIds.filter((id) => id !== qaId);
+      } else {
+        state.qaExpandedIds = [...state.qaExpandedIds, qaId];
+      }
+      renderApp();
+    });
+  });
+
+  const qaCtaStartBtn = document.getElementById('qa-cta-start-btn');
+  if (qaCtaStartBtn) {
+    qaCtaStartBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.qaModalOpen = false;
+      state.viewMode = 'main';
       renderApp();
     });
   }
@@ -3234,6 +4512,21 @@ function bindEvents() {
     });
   });
 
+  const modelChoiceBtns = document.querySelectorAll('.sticker-model-choice-btn');
+  modelChoiceBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      const unitIdx = Number(btn.getAttribute('data-sticker-unit'));
+      const modelName = btn.getAttribute('data-sticker-model');
+      if (!Number.isNaN(unitIdx) && modelName && ALL_STICKER_MODELS.includes(modelName)) {
+        const nextModels = [...state.selectedStickerModels];
+        nextModels[unitIdx] = modelName;
+        state.selectedStickerModels = nextModels;
+        renderApp();
+      }
+    });
+  });
+
   const colorChoiceBtns = document.querySelectorAll('.sticker-color-choice-btn');
   colorChoiceBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -3280,6 +4573,7 @@ function bindEvents() {
         state.packages[1] ||
         state.packages[0];
       const chosenColors = getSelectedColorsForPackage(selectedPkg);
+      const chosenModels = getSelectedModelsForPackage(selectedPkg);
 
       const deliveryMethod =
         state.deliveryMethod === 'paqueteria_nacional'
@@ -3354,6 +4648,7 @@ function bindEvents() {
         pkgName: selectedPkg.name,
         stickerCount: Math.max(1, Math.min(10, Number(selectedPkg.stickerCount) || 1)),
         selectedColors: chosenColors,
+        selectedModels: chosenModels,
         totalPrice: Number(selectedPkg.price) || 249,
         paymentMethod: 'SPEI_WHATSAPP',
         deliveryMethod,
@@ -3650,6 +4945,7 @@ function bindEvents() {
       renderApp();
 
       try {
+        const currentBrandLogo = getActiveOfficialBrandLogoUrl();
         await setDoc(doc(db, 'payment_settings', 'spei'), {
           settingId: 'spei',
           bankName,
@@ -3658,6 +4954,7 @@ function bindEvents() {
           accountOrCard,
           whatsappNumber,
           paymentInstructions,
+          brandLogoUrl: currentBrandLogo,
           updatedAt: serverTimestamp(),
         });
         state.paymentSettings = {
@@ -3668,6 +4965,7 @@ function bindEvents() {
           accountOrCard,
           whatsappNumber,
           paymentInstructions,
+          brandLogoUrl: currentBrandLogo,
         };
         state.adminPaymentSavedSuccess = true;
       } catch (err) {
@@ -3688,6 +4986,81 @@ function bindEvents() {
       state.adminAuthenticated = false;
       state.viewMode = 'main';
       renderApp();
+    });
+  }
+
+  // Direct Official Brand Logo Upload (100% unedited original file)
+  const brandLogoInputs = document.querySelectorAll('.direct-brand-logo-file-input');
+  brandLogoInputs.forEach((inputEl) => {
+    inputEl.addEventListener('change', async (e) => {
+      syncFormInputsBeforeReRender();
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      state.adminLogoError = null;
+      state.adminLogoSavedSuccess = false;
+      state.adminUploadingLogo = true;
+      renderApp();
+
+      try {
+        const exactDataUrl = await readExactLogoFileToDataUrl(file);
+        setStoredLocalLogo(exactDataUrl);
+        state.paymentSettings.brandLogoUrl = exactDataUrl;
+
+        // If authenticated as admin, also persist to Firestore payment_settings/spei for all visitors
+        if (isAuthorizedAdminUser(state.user)) {
+          await setDoc(doc(db, 'payment_settings', 'spei'), {
+            settingId: 'spei',
+            bankName: String(state.paymentSettings.bankName || DEFAULT_PAYMENT_SETTINGS.bankName).trim().slice(0, 80),
+            beneficiaryName: String(state.paymentSettings.beneficiaryName || DEFAULT_PAYMENT_SETTINGS.beneficiaryName).trim().slice(0, 120),
+            clabe: String(state.paymentSettings.clabe || DEFAULT_PAYMENT_SETTINGS.clabe).trim().slice(0, 24),
+            accountOrCard: String(state.paymentSettings.accountOrCard || '').trim().slice(0, 30),
+            whatsappNumber: String(state.paymentSettings.whatsappNumber || DEFAULT_PAYMENT_SETTINGS.whatsappNumber).trim().slice(0, 25),
+            paymentInstructions: String(state.paymentSettings.paymentInstructions || '').trim().slice(0, 350),
+            brandLogoUrl: exactDataUrl,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        state.adminLogoSavedSuccess = true;
+      } catch (err) {
+        state.adminLogoError =
+          err instanceof Error
+            ? err.message
+            : 'No se pudo cargar el archivo original del logotipo.';
+      } finally {
+        state.adminUploadingLogo = false;
+        renderApp();
+      }
+    });
+  });
+
+  const clearBrandLogoBtn = document.getElementById('admin-clear-brand-logo-btn');
+  if (clearBrandLogoBtn) {
+    clearBrandLogoBtn.addEventListener('click', async () => {
+      syncFormInputsBeforeReRender();
+      setStoredLocalLogo('');
+      state.paymentSettings.brandLogoUrl = '';
+      state.adminLogoSavedSuccess = false;
+      state.adminLogoError = null;
+      renderApp();
+
+      if (isAuthorizedAdminUser(state.user)) {
+        try {
+          await setDoc(doc(db, 'payment_settings', 'spei'), {
+            settingId: 'spei',
+            bankName: String(state.paymentSettings.bankName || DEFAULT_PAYMENT_SETTINGS.bankName).trim().slice(0, 80),
+            beneficiaryName: String(state.paymentSettings.beneficiaryName || DEFAULT_PAYMENT_SETTINGS.beneficiaryName).trim().slice(0, 120),
+            clabe: String(state.paymentSettings.clabe || DEFAULT_PAYMENT_SETTINGS.clabe).trim().slice(0, 24),
+            accountOrCard: String(state.paymentSettings.accountOrCard || '').trim().slice(0, 30),
+            whatsappNumber: String(state.paymentSettings.whatsappNumber || DEFAULT_PAYMENT_SETTINGS.whatsappNumber).trim().slice(0, 25),
+            paymentInstructions: String(state.paymentSettings.paymentInstructions || '').trim().slice(0, 350),
+            brandLogoUrl: '',
+            updatedAt: serverTimestamp(),
+          });
+        } catch {
+          // Ignore
+        }
+      }
     });
   }
 
@@ -3814,6 +5187,36 @@ function bindEvents() {
     });
   });
 
+  const adminPkgModelToggles = document.querySelectorAll('.admin-pkg-model-toggle');
+  adminPkgModelToggles.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      const pkgIdx = Number(btn.getAttribute('data-pkg-idx'));
+      const modelName = btn.getAttribute('data-toggle-model');
+      if (Number.isNaN(pkgIdx) || !modelName || !state.packages[pkgIdx]) return;
+
+      const currentModels = Array.isArray(state.packages[pkgIdx].availableModels)
+        ? [...state.packages[pkgIdx].availableModels]
+        : [...ALL_STICKER_MODELS];
+
+      let nextModels;
+      if (currentModels.includes(modelName)) {
+        if (currentModels.length <= 1) return; // Require at least 1 selectable model
+        nextModels = currentModels.filter((m) => m !== modelName);
+      } else {
+        nextModels = ALL_STICKER_MODELS.filter(
+          (m) => currentModels.includes(m) || m === modelName
+        );
+      }
+
+      state.packages[pkgIdx] = {
+        ...state.packages[pkgIdx],
+        availableModels: nextModels,
+      };
+      renderApp();
+    });
+  });
+
   const adminPkgColorToggles = document.querySelectorAll('.admin-pkg-color-toggle');
   adminPkgColorToggles.forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -3865,6 +5268,10 @@ function bindEvents() {
           Array.isArray(pkg.availableColors) && pkg.availableColors.length > 0
             ? pkg.availableColors.filter((c) => ALL_STICKER_COLORS.includes(c))
             : [...ALL_STICKER_COLORS];
+        const availableModels =
+          Array.isArray(pkg.availableModels) && pkg.availableModels.length > 0
+            ? pkg.availableModels.filter((m) => ALL_STICKER_MODELS.includes(m))
+            : [...ALL_STICKER_MODELS];
 
         return {
           pkgId: pkg.pkgId,
@@ -3874,6 +5281,7 @@ function bindEvents() {
           specs: specs.length >= 2 ? specs : DEFAULT_STICKER_PACKAGES[idx].specs,
           stickerCount,
           availableColors,
+          availableModels,
           sortOrder: idx + 1,
         };
       });
@@ -3901,6 +5309,151 @@ function bindEvents() {
       }
     });
   }
+
+  // Admin Sticker Models & Reference Image Upload Handlers
+  const adminModelSlotBtns = document.querySelectorAll('.admin-model-slot-btn');
+  adminModelSlotBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      const modelId = btn.getAttribute('data-model-id');
+      const slot = btn.getAttribute('data-model-slot');
+      if (!modelId || !slot) return;
+      state.adminSelectedModelSlot[modelId] = slot;
+      renderApp();
+    });
+  });
+
+  async function saveSingleStickerModelToFirestore(modelRecord) {
+    const normalized = normalizeStickerModelCatalog(
+      modelRecord,
+      Math.max(0, (modelRecord.sortOrder || 1) - 1)
+    );
+    await setDoc(doc(db, 'sticker_models', normalized.modelId), {
+      modelId: normalized.modelId,
+      name: normalized.name,
+      description: normalized.description,
+      referenceImageUrl: normalized.referenceImageUrl,
+      imageRojo: normalized.imageRojo,
+      imageNegro: normalized.imageNegro,
+      imageGris: normalized.imageGris,
+      imageVerde: normalized.imageVerde,
+      imageAzul: normalized.imageAzul,
+      imageRosa: normalized.imageRosa,
+      imageMorado: normalized.imageMorado,
+      imageAmarillo: normalized.imageAmarillo,
+      sortOrder: normalized.sortOrder,
+      updatedAt: serverTimestamp(),
+    });
+    return normalized;
+  }
+
+  const adminModelFileInputs = document.querySelectorAll('.admin-model-file-input');
+  adminModelFileInputs.forEach((inputEl) => {
+    inputEl.addEventListener('change', async (e) => {
+      syncFormInputsBeforeReRender();
+      const file = e.target.files && e.target.files[0];
+      const modelId = inputEl.getAttribute('data-upload-model-id');
+      const slot = inputEl.getAttribute('data-upload-model-slot') || 'general';
+      if (!file || !modelId) return;
+
+      state.adminModelsError = null;
+      state.adminModelsSavedSuccess = false;
+      state.adminUploadingModelId = modelId;
+      renderApp();
+
+      try {
+        const compressedDataUrl = await compressImageFileToDataUrl(file);
+        const fieldName =
+          slot === 'general' ? 'referenceImageUrl' : getStickerModelColorField(slot);
+        const targetIdx = state.stickerModels.findIndex((m) => m.modelId === modelId);
+        if (targetIdx !== -1) {
+          const updatedModel = {
+            ...state.stickerModels[targetIdx],
+            [fieldName]: compressedDataUrl,
+          };
+          const saved = await saveSingleStickerModelToFirestore(updatedModel);
+          state.stickerModels[targetIdx] = saved;
+          state.adminModelsSavedSuccess = true;
+        }
+      } catch (err) {
+        state.adminModelsError =
+          err instanceof Error
+            ? err.message
+            : 'No se pudo procesar ni guardar la imagen de referencia.';
+      } finally {
+        state.adminUploadingModelId = null;
+        renderApp();
+      }
+    });
+  });
+
+  const adminModelClearSlotBtns = document.querySelectorAll('.admin-model-clear-slot-btn');
+  adminModelClearSlotBtns.forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      syncFormInputsBeforeReRender();
+      const modelId = btn.getAttribute('data-clear-model-id');
+      const slot = btn.getAttribute('data-clear-model-slot') || 'general';
+      if (!modelId) return;
+
+      state.adminModelsError = null;
+      state.adminModelsSavedSuccess = false;
+      state.adminUploadingModelId = modelId;
+      renderApp();
+
+      try {
+        const fieldName =
+          slot === 'general' ? 'referenceImageUrl' : getStickerModelColorField(slot);
+        const targetIdx = state.stickerModels.findIndex((m) => m.modelId === modelId);
+        if (targetIdx !== -1) {
+          const updatedModel = {
+            ...state.stickerModels[targetIdx],
+            [fieldName]: '',
+          };
+          const saved = await saveSingleStickerModelToFirestore(updatedModel);
+          state.stickerModels[targetIdx] = saved;
+          state.adminModelsSavedSuccess = true;
+        }
+      } catch (err) {
+        state.adminModelsError =
+          err instanceof Error
+            ? err.message
+            : 'Error al eliminar la imagen de referencia.';
+      } finally {
+        state.adminUploadingModelId = null;
+        renderApp();
+      }
+    });
+  });
+
+  const adminModelsForm = document.getElementById('admin-models-form');
+  if (adminModelsForm) {
+    adminModelsForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      syncFormInputsBeforeReRender();
+      state.adminModelsSavedSuccess = false;
+      state.adminModelsError = null;
+      state.adminSavingModels = true;
+      renderApp();
+
+      try {
+        const nextModels = [];
+        for (let i = 0; i < state.stickerModels.length; i++) {
+          const saved = await saveSingleStickerModelToFirestore(state.stickerModels[i]);
+          nextModels.push(saved);
+        }
+        state.stickerModels = nextModels;
+        state.adminModelsSavedSuccess = true;
+      } catch (err) {
+        state.adminModelsError =
+          err instanceof Error
+            ? `No se pudieron guardar los modelos: ${err.message}`
+            : 'Error al guardar los modelos de sticker.';
+      } finally {
+        state.adminSavingModels = false;
+        renderApp();
+      }
+    });
+  }
 }
 
 // ============================================================================
@@ -3908,6 +5461,7 @@ function bindEvents() {
 // ============================================================================
 function initBikerSafeApp() {
   subscribeToPackages();
+  subscribeToStickerModels();
   subscribeToPaymentSettings();
 
   const params = new URLSearchParams(window.location.search);

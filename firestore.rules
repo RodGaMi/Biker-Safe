@@ -194,9 +194,19 @@ service cloud.firestore {
         'specs',
         'stickerCount',
         'availableColors',
+        'availableModels',
         'sortOrder',
         'updatedAt'
       ]) &&
+      (!('availableModels' in data) || (
+        data.availableModels is list &&
+        data.availableModels.size() >= 1 &&
+        data.availableModels.size() <= 3 &&
+        data.availableModels[0] is string &&
+        data.availableModels[0].size() >= 3 &&
+        data.availableModels[0].size() <= 20 &&
+        data.availableModels.hasOnly(['Racer', 'Choper', 'Cross'])
+      )) &&
       data.pkgId is string && data.pkgId.size() >= 2 && data.pkgId.size() <= 32 && data.pkgId.matches('^[a-zA-Z0-9_\\-]+$') &&
       data.name is string && data.name.size() >= 2 && data.name.size() <= 80 &&
       data.subtitle is string && data.subtitle.size() >= 1 && data.subtitle.size() <= 80 &&
@@ -210,6 +220,57 @@ service cloud.firestore {
       data.availableColors[0].size() >= 3 &&
       data.availableColors[0].size() <= 20 &&
       data.availableColors.hasOnly(['Rojo', 'Negro', 'Gris', 'Verde', 'Azul', 'Rosa', 'Morado', 'Amarillo']) &&
+      data.sortOrder is number && data.sortOrder >= 1 && data.sortOrder <= 10 &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidStickerModelCatalog(data) {
+      return data.keys().hasAll([
+        'modelId',
+        'name',
+        'description',
+        'referenceImageUrl',
+        'imageRojo',
+        'imageNegro',
+        'imageGris',
+        'imageVerde',
+        'imageAzul',
+        'imageRosa',
+        'imageMorado',
+        'imageAmarillo',
+        'sortOrder',
+        'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'modelId',
+        'name',
+        'description',
+        'referenceImageUrl',
+        'imageRojo',
+        'imageNegro',
+        'imageGris',
+        'imageVerde',
+        'imageAzul',
+        'imageRosa',
+        'imageMorado',
+        'imageAmarillo',
+        'sortOrder',
+        'updatedAt'
+      ]) &&
+      data.modelId is string && data.modelId.size() >= 2 && data.modelId.size() <= 20 && data.modelId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.modelId in ['racer', 'choper', 'cross'] &&
+      data.name is string && data.name.size() >= 3 && data.name.size() <= 20 &&
+      data.name in ['Racer', 'Choper', 'Cross'] &&
+      data.description is string && data.description.size() >= 0 && data.description.size() <= 200 &&
+      data.referenceImageUrl is string && data.referenceImageUrl.size() >= 0 && data.referenceImageUrl.size() <= 350000 &&
+      data.imageRojo is string && data.imageRojo.size() >= 0 && data.imageRojo.size() <= 250000 &&
+      data.imageNegro is string && data.imageNegro.size() >= 0 && data.imageNegro.size() <= 250000 &&
+      data.imageGris is string && data.imageGris.size() >= 0 && data.imageGris.size() <= 250000 &&
+      data.imageVerde is string && data.imageVerde.size() >= 0 && data.imageVerde.size() <= 250000 &&
+      data.imageAzul is string && data.imageAzul.size() >= 0 && data.imageAzul.size() <= 250000 &&
+      data.imageRosa is string && data.imageRosa.size() >= 0 && data.imageRosa.size() <= 250000 &&
+      data.imageMorado is string && data.imageMorado.size() >= 0 && data.imageMorado.size() <= 250000 &&
+      data.imageAmarillo is string && data.imageAmarillo.size() >= 0 && data.imageAmarillo.size() <= 250000 &&
       data.sortOrder is number && data.sortOrder >= 1 && data.sortOrder <= 10 &&
       data.updatedAt is timestamp;
     }
@@ -245,6 +306,7 @@ service cloud.firestore {
         'pkgId',
         'pkgName',
         'stickerCount',
+        'selectedModels',
         'selectedColors',
         'totalPrice',
         'paymentMethod',
@@ -260,6 +322,15 @@ service cloud.firestore {
         'createdAt',
         'updatedAt'
       ]) &&
+      (!('selectedModels' in data) || (
+        data.selectedModels is list &&
+        data.selectedModels.size() >= 1 &&
+        data.selectedModels.size() <= 10 &&
+        data.selectedModels[0] is string &&
+        data.selectedModels[0].size() >= 3 &&
+        data.selectedModels[0].size() <= 20 &&
+        data.selectedModels.hasOnly(['Racer', 'Choper', 'Cross'])
+      )) &&
       (!('deliveryMethod' in data) || (
         data.deliveryMethod is string &&
         data.deliveryMethod.size() >= 5 &&
@@ -316,8 +387,14 @@ service cloud.firestore {
         'accountOrCard',
         'whatsappNumber',
         'paymentInstructions',
+        'brandLogoUrl',
         'updatedAt'
       ]) &&
+      (!('brandLogoUrl' in data) || (
+        data.brandLogoUrl is string &&
+        data.brandLogoUrl.size() >= 0 &&
+        data.brandLogoUrl.size() <= 750000
+      )) &&
       data.settingId is string && data.settingId.size() >= 2 && data.settingId.size() <= 32 && data.settingId.matches('^[a-zA-Z0-9_\\-]+$') &&
       data.bankName is string && data.bankName.size() >= 2 && data.bankName.size() <= 80 &&
       data.beneficiaryName is string && data.beneficiaryName.size() >= 2 && data.beneficiaryName.size() <= 120 &&
@@ -493,12 +570,52 @@ service cloud.firestore {
             'specs',
             'stickerCount',
             'availableColors',
+            'availableModels',
             'sortOrder',
             'updatedAt'
           ])
         );
 
       allow delete: if isAdmin() && isValidPkgId(pkgId);
+    }
+
+    // =========================================================================
+    // Collection 4b: /sticker_models/{modelId} (Racer, Choper, Cross Reference Images)
+    // =========================================================================
+    match /sticker_models/{modelId} {
+      allow get: if isValidPkgId(modelId);
+      allow list: if existing().sortOrder >= 1;
+
+      allow create: if isAdmin() &&
+        isValidPkgId(modelId) &&
+        isValidStickerModelCatalog(incoming()) &&
+        incoming().modelId == modelId &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isAdmin() &&
+        isValidPkgId(modelId) &&
+        isValidStickerModelCatalog(incoming()) &&
+        incoming().modelId == existing().modelId &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'description',
+            'referenceImageUrl',
+            'imageRojo',
+            'imageNegro',
+            'imageGris',
+            'imageVerde',
+            'imageAzul',
+            'imageRosa',
+            'imageMorado',
+            'imageAmarillo',
+            'sortOrder',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if isAdmin() && isValidPkgId(modelId);
     }
 
     // =========================================================================
@@ -584,6 +701,7 @@ service cloud.firestore {
             'accountOrCard',
             'whatsappNumber',
             'paymentInstructions',
+            'brandLogoUrl',
             'updatedAt'
           ])
         );

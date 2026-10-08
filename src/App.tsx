@@ -37,15 +37,19 @@ import {
   handleFirestoreError,
   BLOOD_TYPES,
   ALL_STICKER_COLORS,
+  ALL_STICKER_MODELS,
   AUTHORIZED_ADMIN_EMAIL,
   EmergencyStickerRecord,
   StickerPackageOption,
+  StickerModelCatalogRecord,
   StickerOrderRecord,
   PaymentSettingsRecord,
   OrderStatus,
   DEFAULT_STICKER_PACKAGES,
+  DEFAULT_STICKER_MODELS,
   DEFAULT_PAYMENT_SETTINGS,
   normalizePackageOption,
+  normalizeStickerModelCatalog,
   generateUniqueTagId,
   generateUniqueOrderId,
   sanitizeAndValidateStickerInput,
@@ -62,25 +66,20 @@ import {
 type ViewMode = 'main' | 'public_landing' | 'admin_login' | 'admin_panel';
 type MainStep = 'profile_form' | 'sticker_checkout';
 
-function MotorcycleBrandIcon() {
-  return (
-    <svg
-      viewBox="0 0 28 20"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="w-7 h-5 text-orange-500 shrink-0"
-      aria-hidden="true"
-    >
-      <circle cx="5.5" cy="14.5" r="3.5" stroke="currentColor" strokeWidth="2.2" />
-      <circle cx="22.5" cy="14.5" r="3.5" stroke="currentColor" strokeWidth="2.2" />
-      <path
-        d="M5.5 14.5L10 8H16.5L19.5 14.5M10 8L13 14.5H19.5M15 4.5H18.5L22.5 14.5"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+function MotorcycleBrandIcon({ logoUrl }: { logoUrl?: string }) {
+  if (logoUrl && logoUrl.trim().length > 0) {
+    return (
+      <img
+        src={logoUrl}
+        alt="Biker Safe"
+        className="h-10 sm:h-12 w-auto max-w-[220px] sm:max-w-[260px] object-contain select-none"
       />
-    </svg>
+    );
+  }
+  return (
+    <span className="font-bold tracking-tight text-lg text-white">
+      BIKER <span className="text-orange-500">SAFE</span>
+    </span>
   );
 }
 
@@ -120,10 +119,13 @@ export function BikerSafeApp() {
   );
   const [hasPopulatedInitialForm, setHasPopulatedInitialForm] = useState(false);
 
-  // Configurable 3 purchase packages & SPEI payment settings
+  // Configurable 3 purchase packages, 3 sticker models & SPEI payment settings
   const [packages, setPackages] = useState<StickerPackageOption[]>(
     DEFAULT_STICKER_PACKAGES
   );
+  const [stickerModels, setStickerModels] = useState<
+    StickerModelCatalogRecord[]
+  >(DEFAULT_STICKER_MODELS);
   const [paymentSettings, setPaymentSettings] = useState<PaymentSettingsRecord>(
     DEFAULT_PAYMENT_SETTINGS
   );
@@ -142,6 +144,98 @@ export function BikerSafeApp() {
   const [landingSticker, setLandingSticker] =
     useState<EmergencyStickerRecord | null>(null);
   const [loadingLandingSticker, setLoadingLandingSticker] = useState(false);
+
+  // Floating Q&A Page / Doubt Widget State
+  const [qaModalOpen, setQaModalOpen] = useState(false);
+  const [qaCategoryFilter, setQaCategoryFilter] = useState<
+    'all' | 'nfc' | 'perfil' | 'compra'
+  >('all');
+  const [qaExpandedIds, setQaExpandedIds] = useState<string[]>([
+    'qa-1',
+    'qa-2',
+    'qa-4',
+    'qa-5',
+  ]);
+
+  const QA_CATEGORIES: {
+    id: 'all' | 'nfc' | 'perfil' | 'compra';
+    label: string;
+  }[] = [
+    { id: 'all', label: 'Todas las dudas' },
+    { id: 'nfc', label: 'Funcionamiento NFC' },
+    { id: 'perfil', label: 'Perfil y Privacidad' },
+    { id: 'compra', label: 'Modelos, Pago y Entrega' },
+  ];
+
+  const QA_ITEMS = [
+    {
+      id: 'qa-1',
+      category: 'nfc',
+      categoryLabel: 'Funcionamiento NFC',
+      question: '¿Cómo funciona el Sticker NFC durante una emergencia?',
+      answer:
+        'Al acercar cualquier teléfono inteligente (Android o iPhone) a pocos centímetros del sticker colocado en tu casco o motocicleta, se abre automáticamente en el navegador tu página de emergencia Biker Safe con tu tipo de sangre, alergias, condiciones médicas, póliza de seguro y botones de llamada directa a tus familiares con su parentesco. No requiere instalar ninguna aplicación.',
+    },
+    {
+      id: 'qa-2',
+      category: 'nfc',
+      categoryLabel: 'Funcionamiento NFC',
+      question:
+        '¿El sticker necesita batería, recargas o pago de mensualidades?',
+      answer:
+        'No. La tecnología NFC funciona de forma pasiva por proximidad cuando un celular se acerca al sticker, por lo que nunca requiere batería ni recargas. Además, el acceso y edición de tu perfil médico en Biker Safe no tiene costos mensuales ni anualidades.',
+    },
+    {
+      id: 'qa-3',
+      category: 'perfil',
+      categoryLabel: 'Perfil y Privacidad',
+      question:
+        '¿Puedo modificar mis datos médicos o contactos de emergencia después de comprar?',
+      answer:
+        'Sí, todas las veces que lo necesites. Solo inicia sesión con tu cuenta de Google en Biker Safe, actualiza tus teléfonos de emergencia, parentesco, alergias, seguro o datos de tu motocicleta y guarda los cambios. Tu información se actualiza al instante sin tener que cambiar tu sticker físico.',
+    },
+    {
+      id: 'qa-4',
+      category: 'compra',
+      categoryLabel: 'Modelos, Pago y Entrega',
+      question: '¿Qué modelos y colores puedo elegir para mis stickers?',
+      answer:
+        'Contamos con 3 modelos diseñados para cada estilo de motociclista: Racer (deportivo/pista), Choper (clásico custom/cruiser) y Cross (enduro/off-road). En cualquiera de nuestros 3 paquetes puedes elegir individualmente el modelo y el color (Rojo, Negro, Gris, Verde, Azul, Rosa, Morado o Amarillo) por cada sticker incluido en tu kit.',
+    },
+    {
+      id: 'qa-5',
+      category: 'compra',
+      categoryLabel: 'Modelos, Pago y Entrega',
+      question: '¿Cómo se realiza el pago y cómo funciona la entrega?',
+      answer:
+        'Una vez que guardas tu perfil médico (Paso 1) y personalizas tu paquete (Paso 2), realizas tu pago vía Transferencia SPEI indicando tu Folio de Pedido. Para la entrega puedes elegir entre dos opciones que se acuerdan directamente vía WhatsApp: 1) Entrega Personal (únicamente en Estado de México y CDMX) o 2) Envío por Paquetería a toda la República Mexicana.',
+    },
+    {
+      id: 'qa-6',
+      category: 'nfc',
+      categoryLabel: 'Funcionamiento NFC',
+      question:
+        '¿En qué parte del casco o motocicleta se recomienda pegar el sticker?',
+      answer:
+        'En una superficie limpia, lisa y no metálica, preferentemente en el costado lateral o parte trasera inferior de tu casco, o sobre plásticos del carenado/parabrisas de tu motocicleta. Evita pegarlo directamente sobre metal desnudo para asegurar una lectura NFC inmediata.',
+    },
+    {
+      id: 'qa-7',
+      category: 'nfc',
+      categoryLabel: 'Funcionamiento NFC',
+      question: '¿Resiste la lluvia, el sol y el lavado habitual del casco?',
+      answer:
+        'Sí. Nuestros stickers están diseñados para uso en ruta y exteriores, soportando lluvia, exposición solar, polvo y la limpieza habitual de tu casco o motocicleta sin perder capacidad de lectura.',
+    },
+    {
+      id: 'qa-8',
+      category: 'perfil',
+      categoryLabel: 'Perfil y Privacidad',
+      question: '¿Quién puede ver o editar mi información médica?',
+      answer:
+        'Tu perfil público contiene exclusivamente datos de auxilio médico e identificación para emergencias. Cualquier paramédico o persona que te auxilie puede leer la ficha al acercar su celular al sticker, pero únicamente tú (iniciando sesión con tu cuenta verificada) puedes modificar tus datos.',
+    },
+  ];
 
   // 1. Track Firebase Authentication State
   useEffect(() => {
@@ -186,6 +280,37 @@ export function BikerSafeApp() {
       },
       () => {
         // Fallback to DEFAULT_STICKER_PACKAGES
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // 2a. Subscribe to the 3 sticker models (Racer, Choper, Cross) from Firestore
+  useEffect(() => {
+    const modelsQuery = query(
+      collection(db, 'sticker_models'),
+      where('sortOrder', '>=', 1)
+    );
+    const unsubscribe = onSnapshot(
+      modelsQuery,
+      (snapshot) => {
+        if (!snapshot.empty) {
+          const byId: Record<string, Partial<StickerModelCatalogRecord>> = {};
+          snapshot.forEach((docSnap) => {
+            const d = docSnap.data() as StickerModelCatalogRecord;
+            if (d && d.modelId) {
+              byId[d.modelId] = d;
+            }
+          });
+          setStickerModels(
+            DEFAULT_STICKER_MODELS.map((def, idx) =>
+              normalizeStickerModelCatalog(byId[def.modelId] || def, idx)
+            )
+          );
+        }
+      },
+      () => {
+        // Fallback to DEFAULT_STICKER_MODELS
       }
     );
     return () => unsubscribe();
@@ -447,10 +572,6 @@ export function BikerSafeApp() {
       const cleanName = pkg.name.trim().slice(0, 80);
       const cleanSubtitle = pkg.subtitle.trim().slice(0, 80);
       const cleanPrice = Math.max(1, Math.min(100000, Number(pkg.price) || 249));
-      const cleanShippingCost = Math.max(
-        0,
-        Math.min(50000, Math.round(Number(pkg.shippingCost) || 0))
-      );
       const cleanStickerCount = Math.max(
         1,
         Math.min(10, Math.round(Number(pkg.stickerCount) || 1))
@@ -461,6 +582,12 @@ export function BikerSafeApp() {
               (ALL_STICKER_COLORS as readonly string[]).includes(c)
             )
           : [...ALL_STICKER_COLORS];
+      const cleanAvailableModels =
+        Array.isArray(pkg.availableModels) && pkg.availableModels.length > 0
+          ? pkg.availableModels.filter((m) =>
+              (ALL_STICKER_MODELS as readonly string[]).includes(m)
+            )
+          : [...ALL_STICKER_MODELS];
       const cleanSpecs = pkg.specs.trim().slice(0, 250);
       const path = `packages/${pkg.pkgId}`;
 
@@ -470,16 +597,46 @@ export function BikerSafeApp() {
           name: cleanName.length >= 2 ? cleanName : pkg.name,
           subtitle: cleanSubtitle.length >= 1 ? cleanSubtitle : pkg.subtitle,
           price: cleanPrice,
-          shippingCost: cleanShippingCost,
           specs: cleanSpecs.length >= 2 ? cleanSpecs : pkg.specs,
           stickerCount: cleanStickerCount,
           availableColors: cleanAvailableColors,
+          availableModels: cleanAvailableModels,
           sortOrder: i + 1,
           updatedAt: serverTimestamp(),
         });
       } catch (error) {
         handleFirestoreError(error, OperationType.WRITE, path);
       }
+    }
+  };
+
+  const handleSaveStickerModelFromAdmin = async (
+    updatedModel: StickerModelCatalogRecord
+  ) => {
+    const normalized = normalizeStickerModelCatalog(
+      updatedModel,
+      Math.max(0, (updatedModel.sortOrder || 1) - 1)
+    );
+    const path = `sticker_models/${normalized.modelId}`;
+    try {
+      await setDoc(doc(db, 'sticker_models', normalized.modelId), {
+        modelId: normalized.modelId,
+        name: normalized.name,
+        description: normalized.description,
+        referenceImageUrl: normalized.referenceImageUrl,
+        imageRojo: normalized.imageRojo,
+        imageNegro: normalized.imageNegro,
+        imageGris: normalized.imageGris,
+        imageVerde: normalized.imageVerde,
+        imageAzul: normalized.imageAzul,
+        imageRosa: normalized.imageRosa,
+        imageMorado: normalized.imageMorado,
+        imageAmarillo: normalized.imageAmarillo,
+        sortOrder: normalized.sortOrder,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
     }
   };
 
@@ -697,7 +854,7 @@ export function BikerSafeApp() {
       {/* Top Bar Contract: Brand — Single Main Screen Link — User Auth Action */}
       <header className="bg-[#08090B] text-white border-b border-zinc-800/90">
         <div className="max-w-6xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-4">
-          {/* Zone 1: Brand Wordmark */}
+          {/* Zone 1: Brand Wordmark (Logo only) */}
           <a
             href="#inicio"
             onClick={(e) => {
@@ -705,10 +862,10 @@ export function BikerSafeApp() {
               setViewMode('main');
               setMainStep('profile_form');
             }}
-            className="inline-flex items-center gap-2.5 text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0"
+            aria-label="Biker Safe"
+            className="inline-flex items-center whitespace-nowrap shrink-0"
           >
             <MotorcycleBrandIcon />
-            <span>Biker Safe</span>
           </a>
 
           {/* Zone 2: Only Main Screen in Menu */}
@@ -834,8 +991,10 @@ export function BikerSafeApp() {
             stickers={adminAllStickers}
             orders={adminAllOrders}
             packages={packages}
+            stickerModels={stickerModels}
             paymentSettings={paymentSettings}
             onSavePackages={handleSavePackagesFromAdmin}
+            onSaveStickerModel={handleSaveStickerModelFromAdmin}
             onSavePaymentSettings={handleSavePaymentSettingsFromAdmin}
             onUpdateOrderStatus={handleUpdateOrderStatusFromAdmin}
             onDeleteOrder={handleDeleteOrderFromAdmin}
@@ -890,6 +1049,7 @@ export function BikerSafeApp() {
               <StickerPurchaseSection
                 sticker={userSticker}
                 packages={packages}
+                stickerModels={stickerModels}
                 paymentSettings={paymentSettings}
                 userOrders={userOrders}
                 onCreateOrder={handleCreateOrder}
@@ -1302,6 +1462,16 @@ export function BikerSafeApp() {
             </span>
             <button
               type="button"
+              onClick={() => setQaModalOpen(true)}
+              className="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer"
+            >
+              Dudas (Q&amp;A)
+            </button>
+            <span aria-hidden="true" className="text-zinc-700">
+              ·
+            </span>
+            <button
+              type="button"
               onClick={() => {
                 if (adminAuthenticated) {
                   setViewMode('admin_panel');
@@ -1316,6 +1486,297 @@ export function BikerSafeApp() {
           </div>
         </div>
       </footer>
+
+      {/* Floating Doubt / Q&A Button (Bottom-Right) */}
+      <div className="fixed bottom-5 right-5 z-40">
+        <button
+          type="button"
+          onClick={() => setQaModalOpen((prev) => !prev)}
+          aria-label="Dudas y Preguntas Frecuentes (Q&A)"
+          title="Dudas y Preguntas Frecuentes (Q&A)"
+          aria-expanded={qaModalOpen}
+          className={`group w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center shadow-xl transition-transform duration-150 hover:scale-105 cursor-pointer ${
+            qaModalOpen
+              ? 'bg-zinc-900 text-orange-500 border-2 border-orange-500'
+              : 'bg-orange-500 hover:bg-orange-400 text-black border border-orange-400/40'
+          }`}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="w-6 h-6 sm:w-7 sm:h-7"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Floating Q&A Page Overlay */}
+      {qaModalOpen && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setQaModalOpen(false);
+          }}
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qa-modal-title"
+        >
+          <div className="relative w-full max-w-4xl max-h-[88vh] overflow-y-auto bg-[#14161A] border border-zinc-800 rounded-2xl shadow-2xl flex flex-col">
+            {/* Top Sticky Header of Q&A Page */}
+            <div className="sticky top-0 z-10 bg-[#08090B]/95 backdrop-blur border-b border-zinc-800 px-5 sm:px-8 py-4 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-orange-500/15 border border-orange-500/40 flex items-center justify-center text-orange-500 shrink-0">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="w-5 h-5"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                  </svg>
+                </div>
+                <div>
+                  <h2
+                    id="qa-modal-title"
+                    className="text-base sm:text-lg font-bold text-white tracking-tight"
+                  >
+                    Centro de Dudas y Preguntas Frecuentes (Q&amp;A)
+                  </h2>
+                  <p className="text-xs text-zinc-400">
+                    Conoce qué hacemos en Biker Safe y resuelve todas tus dudas
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setQaModalOpen(false)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 transition-colors cursor-pointer shrink-0"
+              >
+                <span>Cerrar</span>
+                <span aria-hidden="true">✕</span>
+              </button>
+            </div>
+
+            {/* Q&A Page Body */}
+            <div className="p-5 sm:p-8 space-y-8">
+              {/* Initial Section: Brief Description of What We Do */}
+              <section className="bg-gradient-to-br from-[#181B20] via-[#121418] to-[#0B0C0E] border border-orange-500/40 rounded-2xl p-5 sm:p-7 space-y-5">
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-orange-500 tracking-wide">
+                    ¿QUÉ HACEMOS EN BIKER SAFE?
+                  </div>
+                  <h3 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                    Identificación Médica de Emergencia al Instante para Motociclistas
+                  </h3>
+                  <p className="text-sm text-zinc-300 leading-relaxed">
+                    En <strong className="text-white">Biker Safe</strong>{' '}
+                    desarrollamos un sistema de identificación médica y contacto
+                    de emergencia mediante{' '}
+                    <strong className="text-orange-400">
+                      Stickers NFC inteligentes
+                    </strong>{' '}
+                    diseñados para colocarse en tu casco o motocicleta.
+                  </p>
+                  <p className="text-sm text-zinc-400 leading-relaxed">
+                    Sabemos que en un accidente en ruta o ciudad cada segundo
+                    cuenta. Nuestro objetivo es que cualquier paramédico,
+                    rescatista o ciudadano pueda{' '}
+                    <strong className="text-zinc-200">
+                      acercar su teléfono celular a tu sticker NFC
+                    </strong>{' '}
+                    y consultar en menos de 2 segundos tu ficha médica vital
+                    (tipo de sangre, alergias, condiciones médicas, póliza de
+                    seguro y datos de tu moto) así como{' '}
+                    <strong className="text-zinc-200">
+                      llamar con un toque a tus familiares de emergencia
+                    </strong>{' '}
+                    sabiendo su parentesco, sin necesidad de instalar
+                    aplicaciones ni desbloquear tu teléfono.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                  <div className="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                    <div className="text-xs font-bold text-orange-400">
+                      01. Registra tu Perfil Médico
+                    </div>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Guarda tus datos vitales, alergias y contactos de
+                      emergencia con su parentesco. Puedes actualizar tu
+                      información cuando quieras.
+                    </p>
+                  </div>
+
+                  <div className="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                    <div className="text-xs font-bold text-orange-400">
+                      02. Elige Modelo y Color
+                    </div>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Selecciona tu paquete y personaliza cada sticker eligiendo
+                      entre los modelos{' '}
+                      <strong className="text-zinc-200">
+                        Racer, Choper o Cross
+                      </strong>{' '}
+                      y 8 colores disponibles.
+                    </p>
+                  </div>
+
+                  <div className="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                    <div className="text-xs font-bold text-orange-400">
+                      03. Protección Activa 24/7
+                    </div>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Recibe tus stickers programados (entrega personal en
+                      CDMX/EdoMéx o envío nacional acordado por WhatsApp). No
+                      usan batería ni mensualidades.
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              {/* Section 2: Interactive Q&A / Preguntas Frecuentes */}
+              <section className="space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-bold text-white">
+                      Preguntas Frecuentes (Q&amp;A)
+                    </h3>
+                    <p className="text-xs text-zinc-400">
+                      Haz clic en cualquier pregunta para ver u ocultar la
+                      respuesta detallada
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 p-1 bg-[#0B0C0E] border border-zinc-800 rounded-xl">
+                    {QA_CATEGORIES.map((cat) => {
+                      const isActive = qaCategoryFilter === cat.id;
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => setQaCategoryFilter(cat.id)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                            isActive
+                              ? 'bg-orange-500 text-black font-bold'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          {cat.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {(qaCategoryFilter === 'all'
+                    ? QA_ITEMS
+                    : QA_ITEMS.filter(
+                        (item) => item.category === qaCategoryFilter
+                      )
+                  ).map((item) => {
+                    const isExpanded = qaExpandedIds.includes(item.id);
+                    return (
+                      <div
+                        key={item.id}
+                        className={`bg-[#0B0C0E] border ${
+                          isExpanded ? 'border-orange-500/50' : 'border-zinc-800'
+                        } rounded-xl overflow-hidden transition-colors`}
+                      >
+                        <button
+                          type="button"
+                          aria-expanded={isExpanded}
+                          onClick={() =>
+                            setQaExpandedIds((prev) =>
+                              prev.includes(item.id)
+                                ? prev.filter((id) => id !== item.id)
+                                : [...prev, item.id]
+                            )
+                          }
+                          className="w-full px-5 py-4 text-left flex items-center justify-between gap-4 hover:bg-zinc-900/60 transition-colors cursor-pointer"
+                        >
+                          <div className="space-y-1">
+                            <div className="text-[11px] font-medium text-orange-400">
+                              {item.categoryLabel}
+                            </div>
+                            <div className="text-sm sm:text-base font-bold text-white">
+                              {item.question}
+                            </div>
+                          </div>
+                          <span className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-orange-500 shrink-0 font-bold text-sm">
+                            {isExpanded ? '−' : '+'}
+                          </span>
+                        </button>
+                        {isExpanded && (
+                          <div className="px-5 pb-4 pt-1 text-xs sm:text-sm text-zinc-300 leading-relaxed border-t border-zinc-800/70">
+                            {item.answer}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* Bottom Call to Action inside Q&A Page */}
+              <section className="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold text-white">
+                    ¿Listo para proteger tu casco o tienes otra pregunta?
+                  </div>
+                  <p className="text-xs text-zinc-400">
+                    Configura tu perfil médico ahora mismo o escríbenos
+                    directamente por WhatsApp.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                  <a
+                    href={`https://wa.me/${String(
+                      paymentSettings?.whatsappNumber ||
+                        DEFAULT_PAYMENT_SETTINGS.whatsappNumber
+                    ).replace(
+                      /[^0-9]/g,
+                      ''
+                    )}?text=${encodeURIComponent(
+                      'Hola Biker Safe, visité su plataforma y tengo una duda sobre los Stickers NFC de emergencia:'
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap"
+                  >
+                    Preguntar por WhatsApp
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQaModalOpen(false);
+                      setViewMode('main');
+                    }}
+                    className="px-4 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-xl transition-colors whitespace-nowrap cursor-pointer"
+                  >
+                    Ir a Configurar mi Sticker NFC
+                  </button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

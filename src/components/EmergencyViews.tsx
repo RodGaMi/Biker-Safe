@@ -22,6 +22,7 @@ import {
 import {
   EmergencyStickerRecord,
   StickerPackageOption,
+  StickerModelCatalogRecord,
   StickerOrderRecord,
   PaymentSettingsRecord,
   OrderStatus,
@@ -29,11 +30,17 @@ import {
   ORDER_STATUS_LABELS,
   DeliveryMethod,
   DEFAULT_STICKER_PACKAGES,
+  DEFAULT_STICKER_MODELS,
   DEFAULT_PAYMENT_SETTINGS,
   ALL_STICKER_COLORS,
+  ALL_STICKER_MODELS,
   STICKER_COLOR_SWATCHES,
   AUTHORIZED_ADMIN_EMAIL,
   normalizePackageOption,
+  normalizeStickerModelCatalog,
+  getStickerModelColorField,
+  resolveStickerModelImage,
+  compressImageFileToDataUrl,
   buildUniqueStickerUrl,
   buildWhatsAppOrderUrl,
 } from '../lib/firebase';
@@ -44,6 +51,63 @@ function isPersonalDeliveryOrder(order: StickerOrderRecord): boolean {
     String(order.shippingStreet || '').includes('Entrega Personal')
   );
 }
+
+const StickerModelPreviewBox: React.FC<{
+  modelName: string;
+  colorName: string;
+  stickerModels?: StickerModelCatalogRecord[];
+  sizeClass?: string;
+}> = ({
+  modelName,
+  colorName,
+  stickerModels = DEFAULT_STICKER_MODELS,
+  sizeClass = 'w-14 h-14',
+}) => {
+  const cleanModel = ALL_STICKER_MODELS.includes(modelName as any)
+    ? modelName
+    : 'Racer';
+  const imgUrl = resolveStickerModelImage(
+    stickerModels,
+    cleanModel,
+    colorName
+  );
+  const hex = STICKER_COLOR_SWATCHES[colorName] || '#f97316';
+
+  if (imgUrl) {
+    return (
+      <div
+        className={`relative ${sizeClass} rounded-xl bg-zinc-900 border border-zinc-700 overflow-hidden shrink-0 flex items-center justify-center`}
+      >
+        <img
+          src={imgUrl}
+          alt={`Modelo ${cleanModel} - ${colorName}`}
+          className="w-full h-full object-cover"
+        />
+        <span
+          className="absolute bottom-1 right-1 w-3 h-3 rounded-full border border-black/80"
+          style={{ backgroundColor: hex }}
+          title={`Color: ${colorName}`}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`relative ${sizeClass} rounded-xl bg-zinc-900 border border-zinc-800 overflow-hidden shrink-0 flex flex-col items-center justify-center`}
+      style={{ borderColor: `${hex}88` }}
+    >
+      <Wifi className="w-6 h-6" style={{ color: hex }} />
+      <span className="text-[9px] font-bold tracking-wider uppercase text-zinc-200 mt-0.5">
+        {cleanModel}
+      </span>
+      <span
+        className="absolute bottom-1 right-1 w-2.5 h-2.5 rounded-full border border-white/30"
+        style={{ backgroundColor: hex }}
+      />
+    </div>
+  );
+};
 
 // ============================================================================
 // 1. Public Emergency Landing Page (No passwords, no login walls, direct access)
@@ -343,6 +407,7 @@ export const PublicEmergencyLandingPage: React.FC<PublicLandingProps> = ({
 interface StickerPurchaseProps {
   sticker: EmergencyStickerRecord;
   packages: StickerPackageOption[];
+  stickerModels?: StickerModelCatalogRecord[];
   paymentSettings: PaymentSettingsRecord;
   userOrders: StickerOrderRecord[];
   onCreateOrder: (
@@ -357,6 +422,7 @@ interface StickerPurchaseProps {
 export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
   sticker,
   packages,
+  stickerModels = DEFAULT_STICKER_MODELS,
   paymentSettings,
   userOrders,
   onCreateOrder,
@@ -367,6 +433,18 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
       ? packages.map((p, idx) => normalizePackageOption(p, idx))
       : DEFAULT_STICKER_PACKAGES;
   const [selectedPkgId, setSelectedPkgId] = useState<string>('pro');
+  const [selectedModels, setSelectedModels] = useState<string[]>([
+    'Racer',
+    'Choper',
+    'Cross',
+    'Racer',
+    'Choper',
+    'Cross',
+    'Racer',
+    'Choper',
+    'Cross',
+    'Racer',
+  ]);
   const [selectedColors, setSelectedColors] = useState<string[]>([
     'Rojo',
     'Negro',
@@ -412,13 +490,27 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
       ? selectedPkg.availableColors
       : [...ALL_STICKER_COLORS];
 
+  const availModels =
+    Array.isArray(selectedPkg.availableModels) &&
+    selectedPkg.availableModels.length > 0
+      ? selectedPkg.availableModels
+      : [...ALL_STICKER_MODELS];
+
   const chosenColors: string[] = [];
+  const chosenModels: string[] = [];
   for (let i = 0; i < stickerCount; i++) {
-    const candidate = selectedColors[i];
-    if (candidate && availColors.includes(candidate)) {
-      chosenColors.push(candidate);
+    const candidateColor = selectedColors[i];
+    if (candidateColor && availColors.includes(candidateColor)) {
+      chosenColors.push(candidateColor);
     } else {
       chosenColors.push(availColors[i % availColors.length]);
+    }
+
+    const candidateModel = selectedModels[i];
+    if (candidateModel && availModels.includes(candidateModel)) {
+      chosenModels.push(candidateModel);
+    } else {
+      chosenModels.push(availModels[i % availModels.length]);
     }
   }
 
@@ -426,6 +518,14 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
     setSelectedColors((prev) => {
       const next = [...prev];
       next[unitIdx] = colorName;
+      return next;
+    });
+  };
+
+  const handleSelectModelForUnit = (unitIdx: number, modelName: string) => {
+    setSelectedModels((prev) => {
+      const next = [...prev];
+      next[unitIdx] = modelName;
       return next;
     });
   };
@@ -465,6 +565,7 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
         pkgName: selectedPkg.name,
         stickerCount,
         selectedColors: chosenColors,
+        selectedModels: chosenModels,
         totalPrice: Number(selectedPkg.price) || 249,
         deliveryMethod,
         recipientName: recipientName.trim() || sticker.fullName,
@@ -570,31 +671,45 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
               </div>
             </div>
 
-            {/* Selected Colors Summary in Preview */}
+            {/* Selected Models & Colors Summary in Preview */}
             <div className="pt-3 border-t border-zinc-800/80 space-y-2">
               <div className="text-[11px] font-semibold text-zinc-300">
                 {chosenColors.length === 1
-                  ? 'Color de Sticker seleccionado:'
-                  : `Colores seleccionados (${chosenColors.length} stickers):`}
+                  ? 'Modelo y color de Sticker seleccionado:'
+                  : `Modelos y colores seleccionados (${chosenColors.length} stickers):`}
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {chosenColors.map((colorName, idx) => (
-                  <span
-                    key={idx}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-200"
-                  >
-                    <span
-                      className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0"
-                      style={{
-                        backgroundColor:
-                          STICKER_COLOR_SWATCHES[colorName] || '#f97316',
-                      }}
-                    />
-                    <span>
-                      #{idx + 1}: {colorName}
-                    </span>
-                  </span>
-                ))}
+              <div className="grid grid-cols-1 gap-2">
+                {chosenColors.map((colorName, idx) => {
+                  const modelName = chosenModels[idx] || 'Racer';
+                  return (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-3 p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-200"
+                    >
+                      <StickerModelPreviewBox
+                        modelName={modelName}
+                        colorName={colorName}
+                        stickerModels={stickerModels}
+                        sizeClass="w-11 h-11"
+                      />
+                      <div>
+                        <div className="font-bold text-white">
+                          Sticker #{idx + 1} · Modelo {modelName}
+                        </div>
+                        <div className="flex items-center gap-1.5 text-zinc-300 mt-0.5">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0"
+                            style={{
+                              backgroundColor:
+                                STICKER_COLOR_SWATCHES[colorName] || '#f97316',
+                            }}
+                          />
+                          <span>Color: {colorName}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -851,65 +966,127 @@ export const StickerPurchaseSection: React.FC<StickerPurchaseProps> = ({
                 </div>
               </div>
 
-              {/* Per-Sticker Color Selector based on selectedPkg.stickerCount */}
+              {/* Per-Sticker Model (Racer, Choper, Cross) & Color Selector based on selectedPkg.stickerCount */}
               <div className="space-y-3 pt-2 border-t border-zinc-800">
                 <div>
                   <label className="block text-xs font-bold text-zinc-300">
-                    2. Elige el Color de{' '}
+                    2. Elige el Modelo ({availModels.join(', ')}) y Color de{' '}
                     {chosenColors.length === 1
                       ? 'tu Sticker NFC'
                       : `cada uno de tus ${chosenColors.length} Stickers NFC`}
                   </label>
                   <p className="text-[11px] text-zinc-400 mt-0.5">
                     {chosenColors.length === 1
-                      ? 'Este paquete incluye 1 sticker. Selecciona el color de tu preferencia:'
-                      : `Este paquete incluye ${chosenColors.length} stickers. Elige el color para cada uno:`}
+                      ? 'Selecciona entre los 3 modelos disponibles (Racer, Choper, Cross) y su variación de color:'
+                      : `Este paquete incluye ${chosenColors.length} stickers. Elige el modelo y color para cada uno:`}
                   </p>
                 </div>
 
-                <div className="space-y-3">
-                  {chosenColors.map((selectedColor, unitIdx) => (
-                    <div
-                      key={unitIdx}
-                      className="p-3.5 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-2.5"
-                    >
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-bold text-white">
-                          Sticker #{unitIdx + 1}
-                        </span>
-                        <span className="text-orange-400 font-semibold">
-                          Color: {selectedColor}
-                        </span>
+                <div className="space-y-3.5">
+                  {chosenColors.map((selectedColor, unitIdx) => {
+                    const selectedModel =
+                      chosenModels[unitIdx] || availModels[0] || 'Racer';
+                    return (
+                      <div
+                        key={unitIdx}
+                        className="p-4 bg-[#0B0C0E] border border-zinc-800 rounded-xl space-y-3.5"
+                      >
+                        <div className="flex items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
+                          <div className="flex items-center gap-3">
+                            <StickerModelPreviewBox
+                              modelName={selectedModel}
+                              colorName={selectedColor}
+                              stickerModels={stickerModels}
+                              sizeClass="w-14 h-14"
+                            />
+                            <div>
+                              <span className="text-xs font-bold text-white block">
+                                Sticker #{unitIdx + 1} · Modelo {selectedModel}
+                              </span>
+                              <span className="text-[11px] text-orange-400 font-semibold">
+                                Variación: {selectedModel} ({selectedColor})
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <span className="block text-[11px] font-semibold text-zinc-300">
+                            Modelo del Sticker #{unitIdx + 1}:
+                          </span>
+                          <div className="grid grid-cols-3 gap-2">
+                            {availModels.map((modelOption) => {
+                              const isModelSelected =
+                                selectedModel === modelOption;
+                              return (
+                                <button
+                                  key={modelOption}
+                                  type="button"
+                                  onClick={() =>
+                                    handleSelectModelForUnit(
+                                      unitIdx,
+                                      modelOption
+                                    )
+                                  }
+                                  className={`p-2.5 rounded-xl border text-left transition-colors cursor-pointer flex items-center gap-2 ${
+                                    isModelSelected
+                                      ? 'bg-zinc-800 border-orange-500 text-white'
+                                      : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white'
+                                  }`}
+                                >
+                                  <StickerModelPreviewBox
+                                    modelName={modelOption}
+                                    colorName={selectedColor}
+                                    stickerModels={stickerModels}
+                                    sizeClass="w-8 h-8"
+                                  />
+                                  <span className="text-xs font-bold truncate">
+                                    {modelOption}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <span className="block text-[11px] font-semibold text-zinc-300">
+                            Color del Sticker #{unitIdx + 1}:
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {availColors.map((colorOption) => {
+                              const isSelected = selectedColor === colorOption;
+                              const hex =
+                                STICKER_COLOR_SWATCHES[colorOption] || '#f97316';
+                              return (
+                                <button
+                                  key={colorOption}
+                                  type="button"
+                                  onClick={() =>
+                                    handleSelectColorForUnit(
+                                      unitIdx,
+                                      colorOption
+                                    )
+                                  }
+                                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                                    isSelected
+                                      ? 'bg-zinc-800 border-orange-500 text-white'
+                                      : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
+                                  }`}
+                                >
+                                  <span
+                                    className="w-3 h-3 rounded-full border border-white/25 shrink-0"
+                                    style={{ backgroundColor: hex }}
+                                  />
+                                  <span>{colorOption}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        {availColors.map((colorOption) => {
-                          const isSelected = selectedColor === colorOption;
-                          const hex =
-                            STICKER_COLOR_SWATCHES[colorOption] || '#f97316';
-                          return (
-                            <button
-                              key={colorOption}
-                              type="button"
-                              onClick={() =>
-                                handleSelectColorForUnit(unitIdx, colorOption)
-                              }
-                              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
-                                isSelected
-                                  ? 'bg-zinc-800 border-orange-500 text-white'
-                                  : 'bg-[#14161A] border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700'
-                              }`}
-                            >
-                              <span
-                                className="w-3 h-3 rounded-full border border-white/25 shrink-0"
-                                style={{ backgroundColor: hex }}
-                              />
-                              <span>{colorOption}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1406,8 +1583,10 @@ interface AdminDashboardViewProps {
   stickers: EmergencyStickerRecord[];
   orders: StickerOrderRecord[];
   packages: StickerPackageOption[];
+  stickerModels?: StickerModelCatalogRecord[];
   paymentSettings: PaymentSettingsRecord;
   onSavePackages: (updated: StickerPackageOption[]) => Promise<void>;
+  onSaveStickerModel?: (updated: StickerModelCatalogRecord) => Promise<void>;
   onSavePaymentSettings: (updated: PaymentSettingsRecord) => Promise<void>;
   onUpdateOrderStatus: (orderId: string, status: OrderStatus) => Promise<void>;
   onDeleteOrder: (orderId: string) => Promise<void>;
@@ -1420,8 +1599,10 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
   stickers,
   orders,
   packages,
+  stickerModels = DEFAULT_STICKER_MODELS,
   paymentSettings,
   onSavePackages,
+  onSaveStickerModel,
   onSavePaymentSettings,
   onUpdateOrderStatus,
   onDeleteOrder,
@@ -1598,6 +1779,85 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
     setEditablePackages((prev) =>
       prev.map((item, i) => (i === idx ? { ...item, [field]: value } : item))
     );
+  };
+
+  const [editableModels, setEditableModels] = useState<
+    StickerModelCatalogRecord[]
+  >(() =>
+    DEFAULT_STICKER_MODELS.map((def, idx) => {
+      const found = stickerModels.find((m) => m.modelId === def.modelId);
+      return normalizeStickerModelCatalog(found || def, idx);
+    })
+  );
+  const [selectedModelSlot, setSelectedModelSlot] = useState<
+    Record<string, string>
+  >({
+    racer: 'general',
+    choper: 'general',
+    cross: 'general',
+  });
+  const [uploadingModelId, setUploadingModelId] = useState<string | null>(null);
+  const [modelsSavedSuccess, setModelsSavedSuccess] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  const handleTogglePackageModel = (idx: number, modelName: string) => {
+    setEditablePackages((prev) =>
+      prev.map((item, i) => {
+        if (i !== idx) return item;
+        const current =
+          Array.isArray(item.availableModels) && item.availableModels.length > 0
+            ? [...item.availableModels]
+            : [...ALL_STICKER_MODELS];
+        let nextModels: string[];
+        if (current.includes(modelName)) {
+          if (current.length <= 1) return item;
+          nextModels = current.filter((m) => m !== modelName);
+        } else {
+          nextModels = ALL_STICKER_MODELS.filter(
+            (m) => current.includes(m) || m === modelName
+          );
+        }
+        return { ...item, availableModels: nextModels };
+      })
+    );
+  };
+
+  const handleUploadModelReferenceImage = async (
+    modelId: string,
+    slot: string,
+    file: File
+  ) => {
+    setUploadingModelId(modelId);
+    setModelsError(null);
+    setModelsSavedSuccess(false);
+    try {
+      const dataUrl = await compressImageFileToDataUrl(file);
+      const fieldName =
+        slot === 'general'
+          ? 'referenceImageUrl'
+          : getStickerModelColorField(slot);
+      const target = editableModels.find((m) => m.modelId === modelId);
+      if (!target) return;
+      const updated: StickerModelCatalogRecord = {
+        ...target,
+        [fieldName]: dataUrl,
+      };
+      setEditableModels((prev) =>
+        prev.map((m) => (m.modelId === modelId ? updated : m))
+      );
+      if (onSaveStickerModel) {
+        await onSaveStickerModel(updated);
+      }
+      setModelsSavedSuccess(true);
+    } catch (err) {
+      setModelsError(
+        err instanceof Error
+          ? err.message
+          : 'Error al subir la imagen de referencia.'
+      );
+    } finally {
+      setUploadingModelId(null);
+    }
   };
 
   const handleTogglePackageColor = (idx: number, colorName: string) => {
@@ -2117,6 +2377,36 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
 
                   <div>
                     <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
+                      Modelos disponibles (
+                      {(pkg.availableModels || ALL_STICKER_MODELS).length})
+                    </label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ALL_STICKER_MODELS.map((modelName) => {
+                        const enabled = (
+                          pkg.availableModels || ALL_STICKER_MODELS
+                        ).includes(modelName);
+                        return (
+                          <button
+                            key={modelName}
+                            type="button"
+                            onClick={() =>
+                              handleTogglePackageModel(idx, modelName)
+                            }
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors cursor-pointer ${
+                              enabled
+                                ? 'bg-zinc-800 border-orange-500 text-white'
+                                : 'bg-[#14161A] border-zinc-800/80 text-zinc-500 opacity-60 hover:opacity-100'
+                            }`}
+                          >
+                            <span>Modelo {modelName}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-300 mb-1.5">
                       Colores disponibles para elegir (
                       {(pkg.availableColors || ALL_STICKER_COLORS).length})
                     </label>
@@ -2182,6 +2472,140 @@ export const AdminDashboardView: React.FC<AdminDashboardViewProps> = ({
               </button>
             </div>
           </form>
+
+          {/* 3 Sticker Models (Racer, Choper, Cross) & Reference Images */}
+          <div className="pt-8 border-t border-zinc-800 space-y-6">
+            <div>
+              <h2 className="text-xl font-bold text-white">
+                Modelos de Sticker (Racer, Choper, Cross) e Imágenes de
+                Referencia por Color
+              </h2>
+              <p className="text-xs text-zinc-400 mt-1">
+                Sube la imagen de referencia para cada uno de los 3 modelos
+                (Racer, Choper, Cross) en su vista general o por cada variación
+                de color.
+              </p>
+            </div>
+
+            {modelsSavedSuccess && (
+              <div className="p-4 bg-zinc-900 border border-orange-500 rounded-xl text-xs text-orange-400 font-semibold">
+                ¡Imagen de referencia guardada correctamente!
+              </div>
+            )}
+
+            {modelsError && (
+              <div className="p-4 bg-red-950/60 border border-red-800 rounded-xl text-xs text-red-200">
+                {modelsError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {editableModels.map((modelRec, mIdx) => {
+                const activeSlot =
+                  selectedModelSlot[modelRec.modelId] || 'general';
+                const isGeneralSlot = activeSlot === 'general';
+                const previewColor = isGeneralSlot ? 'Rojo' : activeSlot;
+                return (
+                  <div
+                    key={modelRec.modelId}
+                    className="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-4"
+                  >
+                    <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+                      <span className="text-xs font-bold text-orange-500">
+                        MODELO {mIdx + 1} · {modelRec.name.toUpperCase()}
+                      </span>
+                      <span className="text-xs font-mono text-zinc-500">
+                        {modelRec.modelId}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedModelSlot((prev) => ({
+                            ...prev,
+                            [modelRec.modelId]: 'general',
+                          }))
+                        }
+                        className={`px-2.5 py-1 rounded-md text-[11px] font-semibold border cursor-pointer ${
+                          isGeneralSlot
+                            ? 'bg-orange-500 text-black border-orange-500 font-bold'
+                            : 'bg-[#14161A] border-zinc-800 text-zinc-300'
+                        }`}
+                      >
+                        Imagen General
+                      </button>
+                      {ALL_STICKER_COLORS.map((cName) => (
+                        <button
+                          key={cName}
+                          type="button"
+                          onClick={() =>
+                            setSelectedModelSlot((prev) => ({
+                              ...prev,
+                              [modelRec.modelId]: cName,
+                            }))
+                          }
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold border cursor-pointer ${
+                            activeSlot === cName
+                              ? 'bg-zinc-800 border-orange-500 text-white'
+                              : 'bg-[#14161A] border-zinc-800 text-zinc-400'
+                          }`}
+                        >
+                          <span
+                            className="w-2.5 h-2.5 rounded-full border border-white/25"
+                            style={{
+                              backgroundColor:
+                                STICKER_COLOR_SWATCHES[cName] || '#f97316',
+                            }}
+                          />
+                          <span>{cName}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="p-3.5 bg-[#14161A] border border-zinc-800 rounded-xl flex items-center gap-3.5">
+                      <StickerModelPreviewBox
+                        modelName={modelRec.name}
+                        colorName={previewColor}
+                        stickerModels={editableModels}
+                        sizeClass="w-16 h-16"
+                      />
+                      <div className="space-y-2">
+                        <div className="text-xs font-bold text-white">
+                          {isGeneralSlot
+                            ? `Imagen General (${modelRec.name})`
+                            : `${modelRec.name} · ${activeSlot}`}
+                        </div>
+                        <label className="inline-flex items-center justify-center px-3 py-1.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer">
+                          <span>
+                            {uploadingModelId === modelRec.modelId
+                              ? 'Subiendo...'
+                              : 'Subir Imagen'}
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) {
+                                handleUploadModelReferenceImage(
+                                  modelRec.modelId,
+                                  activeSlot,
+                                  f
+                                );
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
           {/* SPEI & WhatsApp Payment Configuration */}
           <div className="pt-8 border-t border-zinc-800 space-y-6">

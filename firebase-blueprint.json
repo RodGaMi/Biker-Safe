@@ -318,6 +318,10 @@
           "type": "array",
           "description": "List of available sticker colors selectable by the customer for this package."
         },
+        "availableModels": {
+          "type": "array",
+          "description": "List of available sticker models (Racer, Choper, Cross) selectable by the customer for this package."
+        },
         "sortOrder": {
           "type": "number",
           "description": "Display order index (1, 2, 3)."
@@ -336,6 +340,116 @@
         "specs",
         "stickerCount",
         "availableColors",
+        "sortOrder",
+        "updatedAt"
+      ]
+    },
+    "StickerModelCatalog": {
+      "title": "StickerModelCatalog",
+      "description": "Sticker model definition (Racer, Choper, Cross) with reference images for the model and its 8 color variations managed by authorized administrators.",
+      "type": "object",
+      "properties": {
+        "modelId": {
+          "type": "string",
+          "description": "Unique model identifier (racer, choper, cross).",
+          "minLength": 2,
+          "maxLength": 20,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the sticker model (Racer, Choper, Cross).",
+          "enum": [
+            "Racer",
+            "Choper",
+            "Cross"
+          ],
+          "minLength": 3,
+          "maxLength": 20
+        },
+        "description": {
+          "type": "string",
+          "description": "Short description of the sticker model style.",
+          "minLength": 0,
+          "maxLength": 200
+        },
+        "referenceImageUrl": {
+          "type": "string",
+          "description": "Primary reference image URL or compressed Data URL for this sticker model.",
+          "minLength": 0,
+          "maxLength": 350000
+        },
+        "imageRojo": {
+          "type": "string",
+          "description": "Optional reference image for Rojo variation.",
+          "minLength": 0,
+          "maxLength": 250000
+        },
+        "imageNegro": {
+          "type": "string",
+          "description": "Optional reference image for Negro variation.",
+          "minLength": 0,
+          "maxLength": 250000
+        },
+        "imageGris": {
+          "type": "string",
+          "description": "Optional reference image for Gris variation.",
+          "minLength": 0,
+          "maxLength": 250000
+        },
+        "imageVerde": {
+          "type": "string",
+          "description": "Optional reference image for Verde variation.",
+          "minLength": 0,
+          "maxLength": 250000
+        },
+        "imageAzul": {
+          "type": "string",
+          "description": "Optional reference image for Azul variation.",
+          "minLength": 0,
+          "maxLength": 250000
+        },
+        "imageRosa": {
+          "type": "string",
+          "description": "Optional reference image for Rosa variation.",
+          "minLength": 0,
+          "maxLength": 250000
+        },
+        "imageMorado": {
+          "type": "string",
+          "description": "Optional reference image for Morado variation.",
+          "minLength": 0,
+          "maxLength": 250000
+        },
+        "imageAmarillo": {
+          "type": "string",
+          "description": "Optional reference image for Amarillo variation.",
+          "minLength": 0,
+          "maxLength": 250000
+        },
+        "sortOrder": {
+          "type": "number",
+          "description": "Display order index (1, 2, 3)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update."
+        }
+      },
+      "required": [
+        "modelId",
+        "name",
+        "description",
+        "referenceImageUrl",
+        "imageRojo",
+        "imageNegro",
+        "imageGris",
+        "imageVerde",
+        "imageAzul",
+        "imageRosa",
+        "imageMorado",
+        "imageAmarillo",
         "sortOrder",
         "updatedAt"
       ]
@@ -388,6 +502,10 @@
         "stickerCount": {
           "type": "number",
           "description": "Number of stickers included in the order (1 to 10)."
+        },
+        "selectedModels": {
+          "type": "array",
+          "description": "Chosen sticker model (Racer, Choper, Cross) for each individual sticker in the package."
         },
         "selectedColors": {
           "type": "array",
@@ -554,6 +672,12 @@
           "minLength": 0,
           "maxLength": 350
         },
+        "brandLogoUrl": {
+          "type": "string",
+          "description": "Exact official brand logo image (Data URL or URL) displayed only in the header brand position.",
+          "minLength": 0,
+          "maxLength": 750000
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",
@@ -608,6 +732,12 @@
         "$ref": "#/entities/PaymentSettings"
       },
       "description": "SPEI transfer and WhatsApp configuration for customer checkout."
+    },
+    "/sticker_models/{modelId}": {
+      "schema": {
+        "$ref": "#/entities/StickerModelCatalog"
+      },
+      "description": "Catalog of the 3 sticker models (Racer, Choper, Cross) and their uploaded reference images."
     }
   }
 }

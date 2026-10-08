@@ -990,6 +990,9 @@ const state = {
   qaModalOpen: false,
   qaCategoryFilter: 'all', // 'all' | 'nfc' | 'perfil' | 'compra'
   qaExpandedIds: ['qa-1', 'qa-2', 'qa-4', 'qa-5'],
+
+  // Aviso de Privacidad Integral Modal State
+  privacyModalOpen: false,
 };
 
 const QA_CATEGORIES = [
@@ -2285,6 +2288,13 @@ function renderStickerCheckoutStep() {
                 </p>
               </div>
 
+              <div class="p-3.5 bg-[#0B0C0E] border border-zinc-800 rounded-xl text-[11px] text-zinc-400 leading-relaxed">
+                Al confirmar tu pedido aceptas nuestro
+                <button type="button" class="open-privacy-modal-btn text-orange-400 hover:text-orange-300 font-semibold underline cursor-pointer">
+                  Aviso de Privacidad Integral
+                </button>. Tus datos de contacto y domicilio se emplean exclusivamente para coordinar el pago y la entrega de tus Stickers NFC.
+              </div>
+
               <button type="submit" ${state.checkoutSubmitting ? 'disabled' : ''} class="w-full py-3.5 px-6 bg-orange-500 hover:bg-orange-400 disabled:opacity-60 text-black text-sm font-bold rounded-xl inline-flex items-center justify-center gap-2 transition-colors cursor-pointer">
                 <span>${
                   state.checkoutSubmitting
@@ -2513,6 +2523,15 @@ function renderProfileFormStep() {
           `
               : ''
           }
+        </div>
+
+        <!-- Consentimiento expreso Aviso de Privacidad -->
+        <div class="p-3.5 bg-[#0B0C0E] border border-zinc-800 rounded-xl text-xs text-zinc-400 leading-relaxed">
+          Al guardar tu perfil médico otorgas tu consentimiento expreso conforme a nuestro
+          <button type="button" class="open-privacy-modal-btn text-orange-400 hover:text-orange-300 font-semibold underline cursor-pointer">
+            Aviso de Privacidad Integral
+          </button>
+          para que los datos registrados en esta ficha puedan ser consultados de forma inmediata al escanear físicamente tu Sticker NFC en caso de emergencia, y declaras contar con autorización de tus contactos de emergencia para incluir sus teléfonos de auxilio.
         </div>
 
         <!-- Primary Action Button -->
@@ -4073,6 +4092,213 @@ function renderFloatingQaWidget() {
   `;
 }
 
+function renderPrivacyNoticeModal() {
+  if (!state.privacyModalOpen) return '';
+
+  const cleanWaPhone = String(
+    state.paymentSettings?.whatsappNumber || DEFAULT_PAYMENT_SETTINGS.whatsappNumber
+  ).replace(/[^0-9]/g, '');
+  const waPrivacyText = encodeURIComponent(
+    'Hola Biker Safe, deseo realizar una consulta sobre el Aviso de Privacidad y mis Datos Personales (Derechos ARCO):'
+  );
+  const waPrivacyUrl = cleanWaPhone
+    ? `https://wa.me/${cleanWaPhone}?text=${waPrivacyText}`
+    : `https://wa.me/?text=${waPrivacyText}`;
+
+  return `
+    <!-- Aviso de Privacidad Integral Modal Overlay -->
+    <div
+      id="privacy-modal-backdrop"
+      class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="privacy-modal-title"
+    >
+      <div
+        id="privacy-modal-panel"
+        class="relative w-full max-w-4xl max-h-[88vh] overflow-y-auto bg-[#14161A] border border-zinc-800 rounded-2xl shadow-2xl flex flex-col"
+      >
+        <!-- Sticky Top Header -->
+        <div class="sticky top-0 z-10 bg-[#08090B]/95 backdrop-blur border-b border-zinc-800 px-5 sm:px-8 py-4 flex items-center justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-orange-500/15 border border-orange-500/40 flex items-center justify-center text-orange-500 shrink-0">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5" aria-hidden="true">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+            </div>
+            <div>
+              <h2 id="privacy-modal-title" class="text-base sm:text-lg font-bold text-white tracking-tight">
+                Aviso de Privacidad Integral y Protección de Datos Personales
+              </h2>
+              <p class="text-xs text-zinc-400">
+                En cumplimiento con la Ley Federal de Protección de Datos Personales en Posesión de los Particulares (LFPDPPP)
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            id="privacy-modal-close-btn"
+            class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 transition-colors cursor-pointer shrink-0"
+          >
+            <span>Cerrar</span>
+            <span aria-hidden="true">✕</span>
+          </button>
+        </div>
+
+        <!-- Body of Aviso de Privacidad -->
+        <div class="p-5 sm:p-8 space-y-6 text-xs sm:text-sm text-zinc-300 leading-relaxed">
+          <!-- Intro Banner -->
+          <section class="bg-gradient-to-br from-[#181B20] via-[#121418] to-[#0B0C0E] border border-orange-500/40 rounded-2xl p-5 sm:p-6 space-y-2.5">
+            <div class="text-xs font-bold text-orange-500 tracking-wide">
+              1. IDENTIDAD Y COMPROMISO DEL RESPONSABLE
+            </div>
+            <p>
+              <strong class="text-white">Biker Safe</strong> (Sistema de Identificación Médica de Emergencia mediante Stickers NFC), con operaciones en la Ciudad de México y Estado de México, es responsable del uso, resguardo y protección de los datos personales y datos personales sensibles que usted (el <strong class="text-white">«Titular»</strong> o <strong class="text-white">«Usuario»</strong>) registra voluntariamente en nuestra plataforma digital, en estricto apego a la <strong class="text-white">Ley Federal de Protección de Datos Personales en Posesión de los Particulares (LFPDPPP)</strong>, su Reglamento y los Lineamientos del Aviso de Privacidad vigentes en los Estados Unidos Mexicanos.
+            </p>
+          </section>
+
+          <!-- 2. Datos Personales Recabados -->
+          <section class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-3">
+            <h3 class="text-sm sm:text-base font-bold text-white">
+              2. Datos Personales y Datos Sensibles que Recabamos
+            </h3>
+            <p class="text-zinc-400">
+              Para el funcionamiento del sistema de auxilio médico NFC y la entrega de sus stickers personalizados, recabamos única y exclusivamente las siguientes categorías de datos proporcionados de manera directa por el Usuario:
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-1">
+              <div class="bg-[#14161A] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                <div class="text-xs font-bold text-orange-400">
+                  A) Datos de Identificación y Cuenta
+                </div>
+                <p class="text-xs text-zinc-300">
+                  Nombre completo, correo electrónico de autenticación segura (vía inicio de sesión verificado con Google), datos identificativos de motocicleta/casco e identificador único del Sticker NFC (<span class="font-mono text-orange-400">Tag ID</span>).
+                </p>
+              </div>
+
+              <div class="bg-[#14161A] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                <div class="text-xs font-bold text-orange-400">
+                  B) Datos Personales Sensibles de Salud
+                </div>
+                <p class="text-xs text-zinc-300">
+                  Tipo de sangre, alergias conocidas, condiciones médicas o padecimientos crónicos, medicación actual, institución o número de póliza de seguro médico/NSS y declaración de donación voluntaria de órganos.
+                </p>
+              </div>
+
+              <div class="bg-[#14161A] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                <div class="text-xs font-bold text-orange-400">
+                  C) Datos de Contactos de Emergencia (Terceros)
+                </div>
+                <p class="text-xs text-zinc-300">
+                  Nombre, parentesco y número telefónico de hasta dos personas de confianza designadas para recibir llamadas de auxilio en caso de accidente. El Usuario manifiesta bajo protesta de decir verdad que cuenta con el consentimiento previo de dichos contactos para registrar sus datos con fines exclusivamente de emergencia.
+                </p>
+              </div>
+
+              <div class="bg-[#14161A] border border-zinc-800 rounded-xl p-4 space-y-1.5">
+                <div class="text-xs font-bold text-orange-400">
+                  D) Datos de Pedido y Entrega
+                </div>
+                <p class="text-xs text-zinc-300">
+                  Nombre del destinatario, número telefónico/WhatsApp de contacto y domicilio o zona de entrega (alcaldía/municipio en CDMX y Estado de México para entrega personal, o dirección postal para envío por paquetería nacional). <strong class="text-white">No recabamos ni almacenamos números de tarjetas bancarias, CVV ni contraseñas financieras.</strong>
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <!-- 3. Finalidad y Naturaleza Pública del Sticker NFC -->
+          <section class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-3">
+            <h3 class="text-sm sm:text-base font-bold text-white">
+              3. Finalidades del Tratamiento y Naturaleza Pública del Sticker de Emergencia NFC
+            </h3>
+            <p>
+              Los datos recabados se utilizan <strong class="text-white">única y exclusivamente para las siguientes finalidades primarias</strong> que dan origen a la relación entre Biker Safe y el Usuario:
+            </p>
+            <ul class="list-disc pl-5 space-y-2 text-zinc-300">
+              <li>
+                <strong class="text-white">Despliegue inmediato en emergencias viales o médicas:</strong> Generar y alojar la ficha médica digital vinculada al chip NFC de su sticker para que paramédicos, cuerpos de emergencia, autoridades o ciudadanos que auxilien al motociclista puedan leerla en segundos al acercar un teléfono móvil al sticker sin requerir contraseñas ni bloqueos.
+              </li>
+              <li>
+                <strong class="text-white">Comunicación inmediata con familiares:</strong> Habilitar los botones de marcación telefónica directa a los contactos de emergencia registrados por el Usuario.
+              </li>
+              <li>
+                <strong class="text-white">Programación, cobro SPEI y entrega del pedido:</strong> Grabar el identificador único en los modelos de sticker seleccionados (<strong class="text-orange-400">Racer, Choper o Cross</strong>), validar su pago vía transferencia SPEI y coordinar la entrega personal (CDMX / Estado de México) o el envío por paquetería a toda la República Mexicana mediante WhatsApp.
+              </li>
+            </ul>
+            <div class="p-4 bg-[#14161A] border border-orange-500/40 rounded-xl text-xs text-zinc-200 space-y-1.5 mt-2">
+              <div class="font-bold text-orange-400">
+                CONSENTIMIENTO EXPRESO Y ALCANCE DE RESPONSABILIDAD SOBRE EL STICKER FÍSICO:
+              </div>
+              <p>
+                El Usuario comprende, acepta y consiente expresamente que, por la naturaleza misma de un dispositivo de identificación de emergencia colocado en el exterior de un casco o motocicleta, <strong class="text-white">cualquier persona que tenga acceso físico o cercano a su Sticker NFC podrá visualizar los datos médicos y teléfonos de emergencia vinculados a dicho identificador</strong>. En consecuencia, el Usuario decide bajo su propia responsabilidad qué información incluye en su perfil público y libera a <strong class="text-white">Biker Safe</strong> de cualquier responsabilidad civil, administrativa o de cualquier otra índole derivada de la consulta por terceros que escaneen físicamente el sticker, así como de la veracidad, exactitud o actualización de los datos médicos ingresados por el propio Usuario.
+              </p>
+            </div>
+          </section>
+
+          <!-- 4. No Transferencia Comercial y Medidas de Seguridad -->
+          <section class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-2.5">
+            <h3 class="text-sm sm:text-base font-bold text-white">
+              4. Confidencialidad, Seguridad y No Comercialización de Datos
+            </h3>
+            <p>
+              <strong class="text-white">Biker Safe NO vende, renta, cede ni comercializa sus datos personales ni médicos con terceros</strong> para fines publicitarios, de mercadotecnia ni de prospección comercial.
+            </p>
+            <p class="text-zinc-400">
+              Los datos de domicilio postal y teléfono de contacto proporcionados en el Paso 2 de compra nunca se muestran en la ficha pública de emergencia del Sticker NFC; permanecen resguardados con acceso restringido únicamente para coordinar la entrega de su paquete y, en caso de envío nacional, compartir los datos de destinatario con la empresa de paquetería acordada. La edición del perfil médico está protegida mediante autenticación criptográfica de cuenta de usuario (Firebase Authentication), de modo que solo el titular autenticado puede modificar su ficha.
+            </p>
+          </section>
+
+          <!-- 5. Derechos ARCO -->
+          <section class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 space-y-3">
+            <h3 class="text-sm sm:text-base font-bold text-white">
+              5. Ejercicio de Derechos ARCO (Acceso, Rectificación, Cancelación y Oposición) y Revocación
+            </h3>
+            <p>
+              Usted es dueño de su información en todo momento y cuenta con dos vías directas para ejercer sus <strong class="text-white">Derechos ARCO</strong> o revocar su consentimiento:
+            </p>
+            <ul class="list-disc pl-5 space-y-1.5 text-zinc-300">
+              <li>
+                <strong class="text-white">Edición inmediata en línea:</strong> Al iniciar sesión con su cuenta en la Pantalla Principal de Biker Safe, usted puede consultar, rectificar, actualizar o suprimir cualquier dato médico o teléfono de emergencia en tiempo real.
+              </li>
+              <li>
+                <strong class="text-white">Solicitud de Cancelación o Baja Definitiva:</strong> Puede solicitar en cualquier momento la eliminación total y definitiva de su perfil médico y de su historial de pedidos enviando un mensaje directo a nuestro canal oficial de atención por WhatsApp indicando su nombre completo y el folio de su perfil (<span class="font-mono text-orange-400">Tag ID</span>). Su solicitud será atendida y ejecutada de forma inmediata sin costo alguno.
+              </li>
+            </ul>
+          </section>
+
+          <!-- 6. Cambios al Aviso de Privacidad -->
+          <section class="bg-[#0B0C0E] border border-zinc-800 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div class="space-y-1">
+              <div class="text-xs font-bold text-white">
+                6. Actualizaciones y Contacto Directo de Privacidad
+              </div>
+              <p class="text-xs text-zinc-400">
+                Cualquier actualización a este Aviso de Privacidad estará siempre disponible en el pie de página de esta plataforma. Última actualización: Octubre 2026.
+              </p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2.5 shrink-0">
+              <a
+                href="${waPrivacyUrl}"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap"
+              >
+                Contacto de Privacidad / Derechos ARCO
+              </a>
+              <button
+                type="button"
+                id="privacy-modal-accept-btn"
+                class="px-4 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-xs font-bold rounded-xl transition-colors whitespace-nowrap cursor-pointer"
+              >
+                Entendido y Aceptar
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 export function renderApp() {
   const root = document.getElementById('root');
   if (!root) return;
@@ -4137,27 +4363,42 @@ export function renderApp() {
         ${mainContentHtml}
       </main>
 
-      <!-- Footer with requested slogan "Stickers de emergencia NFC" and "Personal autorizado" link -->
+      <!-- Footer with requested slogan "Stickers de emergencia NFC", Aviso de Privacidad and "Personal autorizado" link -->
       <footer class="border-t border-zinc-800/80 bg-[#08090B] py-5 px-4 sm:px-8 mt-auto">
-        <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-400">
-          <span class="font-semibold text-zinc-300">Stickers de emergencia NFC</span>
-          <div class="flex items-center gap-4">
-            <button type="button" id="footer-main-btn" class="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer">
-              Pantalla Principal
-            </button>
-            <span aria-hidden="true" class="text-zinc-700">·</span>
-            <button type="button" id="footer-qa-btn" class="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer">
-              Dudas (Q&amp;A)
-            </button>
-            <span aria-hidden="true" class="text-zinc-700">·</span>
-            <button type="button" id="footer-admin-btn" class="text-zinc-500 hover:text-orange-400 transition-colors cursor-pointer">
-              Personal autorizado
+        <div class="max-w-6xl mx-auto flex flex-col gap-3 text-xs text-zinc-400">
+          <div class="flex flex-col sm:flex-row items-center justify-between gap-3">
+            <span class="font-semibold text-zinc-300">Stickers de emergencia NFC</span>
+            <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+              <button type="button" id="footer-main-btn" class="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer">
+                Pantalla Principal
+              </button>
+              <span aria-hidden="true" class="text-zinc-700">·</span>
+              <button type="button" id="footer-qa-btn" class="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer">
+                Dudas (Q&amp;A)
+              </button>
+              <span aria-hidden="true" class="text-zinc-700">·</span>
+              <button type="button" id="footer-privacy-btn" class="text-zinc-300 hover:text-orange-400 font-semibold transition-colors cursor-pointer">
+                Aviso de Privacidad
+              </button>
+              <span aria-hidden="true" class="text-zinc-700">·</span>
+              <button type="button" id="footer-admin-btn" class="text-zinc-500 hover:text-orange-400 transition-colors cursor-pointer">
+                Personal autorizado
+              </button>
+            </div>
+          </div>
+          <div class="border-t border-zinc-900 pt-2.5 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px] text-zinc-500 text-center sm:text-left">
+            <span>
+              Tus datos personales y médicos están protegidos conforme a la LFPDPPP y se utilizan exclusivamente para tu identificación de emergencia NFC y entrega de pedidos.
+            </span>
+            <button type="button" class="open-privacy-modal-btn text-orange-400/90 hover:text-orange-300 underline cursor-pointer shrink-0">
+              Consultar Aviso de Privacidad Integral
             </button>
           </div>
         </div>
       </footer>
 
       ${renderFloatingQaWidget()}
+      ${renderPrivacyNoticeModal()}
     </div>
   `;
 
@@ -4201,6 +4442,53 @@ function bindEvents() {
       syncFormInputsBeforeReRender();
       state.qaModalOpen = true;
       renderApp();
+    });
+  }
+
+  const footerPrivacyBtn = document.getElementById('footer-privacy-btn');
+  if (footerPrivacyBtn) {
+    footerPrivacyBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.privacyModalOpen = true;
+      renderApp();
+    });
+  }
+
+  const openPrivacyModalBtns = document.querySelectorAll('.open-privacy-modal-btn');
+  openPrivacyModalBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.privacyModalOpen = true;
+      renderApp();
+    });
+  });
+
+  const privacyModalCloseBtn = document.getElementById('privacy-modal-close-btn');
+  if (privacyModalCloseBtn) {
+    privacyModalCloseBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.privacyModalOpen = false;
+      renderApp();
+    });
+  }
+
+  const privacyModalAcceptBtn = document.getElementById('privacy-modal-accept-btn');
+  if (privacyModalAcceptBtn) {
+    privacyModalAcceptBtn.addEventListener('click', () => {
+      syncFormInputsBeforeReRender();
+      state.privacyModalOpen = false;
+      renderApp();
+    });
+  }
+
+  const privacyModalBackdrop = document.getElementById('privacy-modal-backdrop');
+  if (privacyModalBackdrop) {
+    privacyModalBackdrop.addEventListener('click', (e) => {
+      if (e.target === privacyModalBackdrop) {
+        syncFormInputsBeforeReRender();
+        state.privacyModalOpen = false;
+        renderApp();
+      }
     });
   }
 

@@ -3,15 +3,55 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Biker Safe — Sistema de Emergencia Médica NFC</title>
-    <meta name="description" content="Plataforma de identificación médica de emergencia mediante stickers NFC con autenticación segura para motociclistas y servicios paramédicos." />
-    <meta property="og:title" content="Biker Safe — Sistema de Emergencia Médica NFC" />
-    <meta property="og:description" content="Plataforma de identificación médica de emergencia mediante stickers NFC con autenticación segura para motociclistas y servicios paramédicos." />
+    <title>Biker Safe — Stickers de Emergencia Médica NFC para Motociclistas</title>
+    <meta
+      name="description"
+      content="Stickers NFC inteligentes para cascos de moto. Acceso instantáneo en menos de 2 segundos a tu ficha médica vital y llamadas a familiares en caso de accidente. Cero baterías, sin apps y sin mensualidades."
+    />
+    <meta
+      name="keywords"
+      content="sticker nfc moto, ficha medica motociclista, emergencia moto nfc, identificacion medica casco, biker safe, misafemoto, seguridad motociclista cdmx mexico"
+    />
+    <meta name="author" content="Biker Safe México" />
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#08090B" />
+
+    <!-- Open Graph / Facebook / WhatsApp -->
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Biker Safe" />
+    <meta property="og:locale" content="es_MX" />
+    <meta property="og:title" content="Biker Safe — Stickers de Emergencia Médica NFC para Motociclistas" />
+    <meta
+      property="og:description"
+      content="El sticker NFC en tu casco que puede salvar tu vida. Paramédicos y rescatistas leen tu tipo de sangre, alergias, póliza de seguro y llaman a tus familiares con un solo toque."
+    />
+    <meta property="og:image" content="https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=1200&q=80" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Biker Safe Sticker NFC de Emergencia Médica en Casco de Motociclista" />
+
+    <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Biker Safe — Stickers de Emergencia Médica NFC para Motociclistas" />
+    <meta
+      name="twitter:description"
+      content="Identificación médica vital en tu casco en menos de 2 segundos. Diseñado para salvar vidas en la carretera."
+    />
+    <meta name="twitter:image" content="https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=1200&q=80" />
+
+    <!-- Favicon (SVG High-Tech Helmet & Medical Cross) -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2308090B'/%3E%3Ccircle cx='16' cy='16' r='13' stroke='%23F97316' stroke-width='2' fill='none'/%3E%3Cpath d='M13 8h6v5h5v6h-5v5h-6v-5H8v-6h5V8z' fill='%23F97316'/%3E%3C/svg%3E"
+    />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="./styles.css" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="importmap">
@@ -21,6 +61,78 @@
           "firebase/auth": "https://www.gstatic.com/firebasejs/11.4.0/firebase-auth.js",
           "firebase/firestore": "https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js"
         }
+      }
+    </script>
+
+    <!-- Schema.org Structured Data (JSON-LD) for SEO & Rich Search Results -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://bikersafe.mx/#organization",
+            "name": "Biker Safe",
+            "alternateName": "MiSafeMoto",
+            "description": "Sistema de identificación médica de emergencia mediante stickers NFC para motociclistas en México.",
+            "url": "https://bikersafe.mx",
+            "logo": "https://images.unsplash.com/photo-1558981806-ec527fa84c39?auto=format&fit=crop&w=600&q=80",
+            "contactPoint": {
+              "@type": "ContactPoint",
+              "contactType": "customer service",
+              "availableLanguage": "Spanish",
+              "areaServed": "MX"
+            }
+          },
+          {
+            "@type": "Product",
+            "@id": "https://bikersafe.mx/#product",
+            "name": "Sticker NFC de Emergencia Médica para Casco Biker Safe",
+            "description": "Sticker NFC inteligente con chip pasivo NTAG de alta sensibilidad, resistente al agua y a los rayos UV, vinculado a ficha médica de emergencia y contactos directos sin aplicaciones.",
+            "image": "https://images.unsplash.com/photo-1568772585407-9361f9bf3a87?auto=format&fit=crop&w=1200&q=80",
+            "brand": {
+              "@type": "Brand",
+              "name": "Biker Safe"
+            },
+            "offers": {
+              "@type": "AggregateOffer",
+              "priceCurrency": "MXN",
+              "lowPrice": "199",
+              "highPrice": "449",
+              "offerCount": "3"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://bikersafe.mx/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "¿Cómo funciona el Sticker NFC durante una emergencia en moto?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Al acercar cualquier smartphone a pocos centímetros del sticker en tu casco, se abre de inmediato en el navegador tu ficha médica con tipo de sangre, alergias, seguro y botones para llamar a tus familiares sin necesidad de instalar apps ni contraseñas."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "¿El sticker necesita batería o pago de mensualidades?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. La tecnología NFC funciona de forma pasiva por inducción electromagnética cuando un teléfono se acerca. No usa batería y no cobramos mensualidades ni suscripciones."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "¿Qué modelos y colores están disponibles?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Ofrecemos tres modelos: Racer (deportivo), Choper (clásico custom) y Cross (enduro off-road), en 8 colores distintos para combinar con tu casco o moto."
+                }
+              }
+            ]
+          }
+        ]
       }
     </script>
   </head>

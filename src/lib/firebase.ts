@@ -622,10 +622,11 @@ export function normalizePackageOption(
 
   let cleanedSpecs = raw.specs || fallback.specs;
   if (
-    /NTAG213|NTAG215|Resina Epóxica 3M|Acabado Resina 3M/i.test(cleanedSpecs)
+    /NTAG213|NTAG215|Resina|Epóxica/i.test(cleanedSpecs)
   ) {
     cleanedSpecs = fallback.specs;
   }
+  cleanedSpecs = String(cleanedSpecs).replace(/resina\s*(epóxica|uv)?/gi, 'vinil automotriz');
 
   return {
     pkgId: raw.pkgId || fallback.pkgId,

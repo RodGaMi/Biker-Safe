@@ -66,8 +66,9 @@ import {
   AdminLoginView,
   AdminDashboardView,
 } from './components/EmergencyViews';
+import { HomeLandingView } from './components/HomeLandingView';
 
-type ViewMode = 'main' | 'public_landing' | 'admin_login' | 'admin_panel';
+type ViewMode = 'home' | 'main' | 'public_landing' | 'admin_login' | 'admin_panel';
 type MainStep = 'profile_form' | 'sticker_checkout';
 
 function MotorcycleBrandIcon({ logoUrl }: { logoUrl?: string }) {
@@ -91,7 +92,7 @@ export function BikerSafeApp() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
-  const [viewMode, setViewMode] = useState<ViewMode>('main');
+  const [viewMode, setViewMode] = useState<ViewMode>('home');
   const [mainStep, setMainStep] = useState<MainStep>('profile_form');
   const [adminAuthenticated, setAdminAuthenticated] = useState(false);
 
@@ -980,34 +981,100 @@ export function BikerSafeApp() {
             href="#inicio"
             onClick={(e) => {
               e.preventDefault();
-              setViewMode('main');
-              setMainStep('profile_form');
+              setViewMode('home');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             aria-label="Biker Safe"
-            className="inline-flex items-center whitespace-nowrap shrink-0"
+            className="inline-flex items-center whitespace-nowrap shrink-0 cursor-pointer"
           >
             <MotorcycleBrandIcon />
           </a>
 
-          {/* Zone 2: Only Main Screen in Menu */}
-          <nav className="flex items-center gap-6 text-sm font-medium">
+          {/* Zone 2: Navigation Links */}
+          <nav className="hidden md:flex items-center gap-6 text-xs font-semibold">
             <button
               type="button"
               onClick={() => {
-                setViewMode('main');
+                setViewMode('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               className={`py-1 transition-colors whitespace-nowrap cursor-pointer ${
-                viewMode === 'main'
+                viewMode === 'home'
                   ? 'text-orange-500 border-b-2 border-orange-500 font-bold'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
-              Pantalla Principal
+              Inicio
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (viewMode !== 'home') setViewMode('home');
+                setTimeout(() => {
+                  document.getElementById('como-funciona')?.scrollIntoView({ behavior: 'smooth' });
+                }, 50);
+              }}
+              className="py-1 text-zinc-400 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
+            >
+              Cómo Funciona
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (viewMode !== 'home') setViewMode('home');
+                setTimeout(() => {
+                  document.getElementById('modelos')?.scrollIntoView({ behavior: 'smooth' });
+                }, 50);
+              }}
+              className="py-1 text-zinc-400 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
+            >
+              Modelos
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (viewMode !== 'home') setViewMode('home');
+                setTimeout(() => {
+                  document.getElementById('paquetes')?.scrollIntoView({ behavior: 'smooth' });
+                }, 50);
+              }}
+              className="py-1 text-zinc-400 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
+            >
+              Paquetes y Precios
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('main');
+                setMainStep('profile_form');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className={`py-1 transition-colors whitespace-nowrap cursor-pointer ${
+                viewMode === 'main'
+                  ? 'text-orange-500 border-b-2 border-orange-500 font-bold'
+                  : 'text-zinc-300 hover:text-orange-400'
+              }`}
+            >
+              Configurar Ficha / App
             </button>
           </nav>
 
           {/* Zone 3: User Account Action */}
           <div className="flex items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode(viewMode === 'home' ? 'main' : 'home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className={`md:hidden inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                viewMode === 'main'
+                  ? 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
+                  : 'bg-orange-500 text-black hover:bg-orange-400'
+              }`}
+            >
+              <span>{viewMode === 'home' ? 'Ir a la App' : 'Ver Inicio'}</span>
+            </button>
             {user ? (
               <div className="flex items-center gap-3">
                 <span className="hidden sm:inline text-xs text-zinc-400 truncate max-w-[180px]">
@@ -1053,7 +1120,25 @@ export function BikerSafeApp() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-10">
-        {viewMode === 'public_landing' ? (
+        {viewMode === 'home' ? (
+          <HomeLandingView
+            packages={packages}
+            stickerModels={stickerModels}
+            whatsappNumber={paymentSettings.whatsappNumber}
+            isLoggedIn={Boolean(user)}
+            onGoToApp={() => {
+              setViewMode('main');
+              setMainStep('profile_form');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            onSelectPackage={(_pkgId) => {
+              setViewMode('main');
+              setMainStep('sticker_checkout');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            onOpenFullQa={() => setQaModalOpen(true)}
+          />
+        ) : viewMode === 'public_landing' ? (
           <PublicEmergencyLandingPage
             sticker={landingSticker || userSticker}
             loading={loadingLandingSticker}
@@ -1628,18 +1713,32 @@ export function BikerSafeApp() {
         <div className="max-w-6xl mx-auto flex flex-col gap-3 text-xs text-zinc-400">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             <span className="font-semibold text-zinc-300">
-              Stickers de emergencia NFC
+              Stickers de emergencia NFC · Biker Safe México
             </span>
             <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
               <button
                 type="button"
                 onClick={() => {
-                  setViewMode('main');
-                  setMainStep('profile_form');
+                  setViewMode('home');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 className="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer"
               >
-                Pantalla Principal
+                Inicio
+              </button>
+              <span aria-hidden="true" className="text-zinc-700">
+                ·
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('main');
+                  setMainStep('profile_form');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="text-zinc-400 hover:text-orange-400 transition-colors cursor-pointer"
+              >
+                Configurar mi Ficha (App)
               </button>
               <span aria-hidden="true" className="text-zinc-700">
                 ·
